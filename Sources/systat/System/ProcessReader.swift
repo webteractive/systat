@@ -14,7 +14,8 @@ import SystatCore
     return apps
 }
 
-/// Lists every process: libproc for the user's own, `ps` for everyone else's.
+/// Lists every process: libproc for the user's own, `ps` for everyone else's figures.
+/// Paths come from `proc_pidpath`, which works for every process; `ps` supplies numbers only.
 struct ProcessReader: Sendable {
     private static let timebase: (numer: UInt64, denom: UInt64) = {
         var info = mach_timebase_info_data_t()
@@ -33,13 +34,13 @@ struct ProcessReader: Sendable {
             if k.uid == currentUID, let usage = rusage(pid: k.pid) {
                 record.memoryBytes = usage.footprint
                 record.cpuTimeNanos = usage.cpuNanos
-                record.executablePath = executablePath(pid: k.pid) ?? ps[k.pid]?.command
+                record.executablePath = executablePath(pid: k.pid)
                 record.arguments = arguments(pid: k.pid)
                 record.workingDirectory = workingDirectory(pid: k.pid)
             } else if let entry = ps[k.pid] {
                 record.memoryBytes = entry.rssBytes
                 record.psCPUPercent = entry.cpuPercent
-                record.executablePath = entry.command.hasPrefix("/") ? entry.command : nil
+                record.executablePath = executablePath(pid: k.pid)
                 record.isApproximate = true
             } else {
                 return nil
@@ -51,7 +52,7 @@ struct ProcessReader: Sendable {
     private func runPS() -> String {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/ps")
-        process.arguments = ["-axo", "pid=,rss=,%cpu=,comm="]
+        process.arguments = ["-axo", "pid=,rss=,%cpu="]
         process.environment = ["LC_ALL": "C"]
         let pipe = Pipe()
         process.standardOutput = pipe

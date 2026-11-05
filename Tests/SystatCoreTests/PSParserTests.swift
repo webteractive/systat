@@ -2,31 +2,25 @@ import Foundation
 import Testing
 @testable import SystatCore
 
-@Test func parsesCommandWithSpacesAndParens() {
+@Test func parsesNumericColumns() {
     let out = """
-      163  450000  12.5 /System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer
-     4242  120000   0.0 /Applications/Google Chrome.app/Contents/Frameworks/Google Chrome Framework.framework/Helpers/Google Chrome Helper (Renderer).app/Contents/MacOS/Google Chrome Helper (Renderer)
+      163  450000  12.5
+     4242  120000   0.0
     garbage line
+       77  1000  1.0  trailing-text
     """
-    let e = PSParser.parse(out)
-    #expect(e.count == 2)
-    #expect(e[0] == PSEntry(pid: 163, rssBytes: 450_000 * 1024, cpuPercent: 12.5,
-                            command: "/System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer"))
-    #expect(e[1].command.hasSuffix("Google Chrome Helper (Renderer)"))
+    #expect(PSParser.parse(out) == [
+        PSEntry(pid: 163, rssBytes: 450_000 * 1024, cpuPercent: 12.5),
+        PSEntry(pid: 4242, rssBytes: 120_000 * 1024, cpuPercent: 0),
+    ])
 }
 
 @Test func rejectsOverflowingResidentSize() {
-    #expect(PSParser.parse("  7 18446744073709551615 0.0 /bin/evil").isEmpty)
+    #expect(PSParser.parse("  7 18446744073709551615 0.0").isEmpty)
 }
 
-@Test func dropsPIDsThatAppearTwice() {
-    // A command name containing a newline can forge a second line for another PID.
-    let out = """
-      10  1000  1.0 /bin/real
-      20  2000  2.0 /tmp/x
-      10  999999  99.0 forged
-    """
-    #expect(PSParser.parse(out).map(\.pid) == [20])
+@Test func keepsTheFirstLineForAPID() {
+    #expect(PSParser.parse("10 1000 1.0\n10 2000 2.0").map(\.rssBytes) == [1000 * 1024])
 }
 
 @Test func sanitizesControlCharacters() {

@@ -218,6 +218,12 @@ What the numbers mean:
   - everyone else's: resident size and `%cpu` from one `ps` run per refresh.
     `ps`'s `%cpu` is a decaying average rather than a strict interval figure;
     that is close enough for ranking.
+  - `ps` is asked for numbers only (`pid=,rss=,%cpu=`), never for names. A
+    command name can contain a newline and so forge a line for another
+    process. Names and paths come from the kernel instead: `proc_pidpath`
+    works for every process, root ones included.
+  - The kernel's start time for another user's process is not wall-clock
+    time, so those rows show no age.
   - Resident size counts shared memory, so it is not the same figure as
     footprint. Values read from `ps` get a leading `≈` (e.g. `≈ 1.2 GB`,
     `≈ 40%`). That way the list doesn't present two different measures as

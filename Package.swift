@@ -8,5 +8,6 @@ let package = Package(
         .target(name: "SystatCore"),
         .executableTarget(name: "systat", dependencies: ["SystatCore"]),
         .testTarget(name: "SystatCoreTests", dependencies: ["SystatCore"]),
+        .testTarget(name: "systatTests", dependencies: ["systat", "SystatCore"]),
     ]
 )
