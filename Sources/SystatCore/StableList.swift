@@ -33,7 +33,8 @@ public struct StableList: Sendable {
     /// `all` is every row, not only the top 10, so a row that drops out of the top 10 is not mistaken for ended.
     public mutating func update(with all: [ProcessRow], frozen: Bool, now: Date) {
         let fresh = Dictionary(all.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-        if frozen {
+        // An empty list has nothing under the pointer to protect, so it fills even while frozen.
+        if frozen && !rows.isEmpty {
             rows = rows.map { current in
                 guard let row = fresh[current.id] else { return DisplayRow(row: current.row, state: .ended) }
                 return DisplayRow(row: row, state: current.state)

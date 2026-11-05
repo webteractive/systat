@@ -7,17 +7,19 @@ struct MachineReader: Sendable {
     private let host = mach_host_self()
     private let pageSize = UInt64(getpagesize())
     private var previousTicks: CPUTicks?
+    private var disk = CachedReading<(free: UInt64, capacity: UInt64)>()
 
     init() {}
 
-    mutating func sample(now: Date) -> MachineSample {
+    /// `diskMaxAge`: the free-space read is costly and changes slowly, so it is reused until this old.
+    mutating func sample(now: Date, diskMaxAge: TimeInterval = 0) -> MachineSample {
         let swap = Sysctl.swapUsage() ?? (0, 0)
         let ticks = cpuTicks()
         let busy = ticks.map { CPUTicks.busyFraction(from: previousTicks ?? CPUTicks(user: 0, system: 0, idle: 0, nice: 0), to: $0) } ?? 0
         if let ticks { previousTicks = ticks }
         var load = [0.0]
         _ = getloadavg(&load, 1)
-        let disk = diskSpace()
+        let disk = self.disk.value(now: now, maxAge: diskMaxAge, read: Self.diskSpace) ?? (0, 0)
         return MachineSample(time: now,
                              pressureLevel: Sysctl.int32("kern.memorystatus_vm_pressure_level") ?? 1,
                              swapUsed: swap.used, swapTotal: swap.total,
@@ -53,10 +55,12 @@ struct MachineReader: Sendable {
         return CPUTicks(user: UInt64(t.0), system: UInt64(t.1), idle: UInt64(t.2), nice: UInt64(t.3))
     }
 
-    private func diskSpace() -> (free: UInt64, capacity: UInt64) {
+    /// Nil when the volume cannot be read, so a failed read never looks like a full disk.
+    private static func diskSpace() -> (free: UInt64, capacity: UInt64)? {
         let url = URL(fileURLWithPath: "/System/Volumes/Data")
-        let values = try? url.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey, .volumeTotalCapacityKey])
-        return (UInt64(max(0, values?.volumeAvailableCapacityForImportantUsage ?? 0)),
-                UInt64(max(0, values?.volumeTotalCapacity ?? 0)))
+        guard let values = try? url.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey, .volumeTotalCapacityKey]),
+              let free = values.volumeAvailableCapacityForImportantUsage, let capacity = values.volumeTotalCapacity,
+              capacity > 0 else { return nil }
+        return (UInt64(max(0, free)), UInt64(capacity))
     }
 }

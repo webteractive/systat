@@ -24,3 +24,10 @@ import Testing
     #expect(KillOutcome(errno: ESRCH) == .gone)
     #expect(KillOutcome(errno: EPERM) == .failed("Not permitted"))
 }
+
+@Test func denyListMatchesTheExecutableNotOnlyTheDisplayName() {
+    // A GUI app's display name is its localized name; the executable name is not localized.
+    #expect(Protection.classify(uid: 501, currentUID: 501, pid: 165,
+                                executablePath: "/System/Library/CoreServices/loginwindow.app/Contents/MacOS/loginwindow",
+                                name: "Anmeldefenster") == .macOS)
+}

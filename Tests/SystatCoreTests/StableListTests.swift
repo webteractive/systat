@@ -63,3 +63,10 @@ private func t(_ seconds: Double) -> Date { Date(timeIntervalSince1970: seconds)
     l.update(with: [row(1, mem: 30)], frozen: false, now: t(4))
     #expect(l.rows[0].state == .normal)
 }
+
+@Test func frozenUpdateFillsAnEmptyList() {
+    // The pointer can reach the list before the first rows arrive; nothing is under it to protect.
+    var l = StableList(kind: .memory)
+    l.update(with: [row(1, mem: 10), row(2, mem: 20)], frozen: true, now: t(0))
+    #expect(l.rows.map(\.id.pid) == [2, 1])
+}

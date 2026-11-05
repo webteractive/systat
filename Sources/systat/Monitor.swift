@@ -25,6 +25,8 @@ import SystatCore
     @ObservationIgnored private var isOpen = false
     @ObservationIgnored private var lastClick = Date.distantPast
     @ObservationIgnored private var loop: Task<Void, Never>?
+    /// Bumped on every open and close, so a read started before one is dropped after it.
+    @ObservationIgnored private var generation = 0
 
     private let uid = getuid()
     private let selfPID = getpid()
@@ -33,18 +35,22 @@ import SystatCore
     private static let openInterval: Duration = .seconds(2)
     private static let closedInterval: Duration = .seconds(5)
     private static let clickHold: TimeInterval = 1
+    private static let closedDiskMaxAge: TimeInterval = 30
+    private static let openDiskMaxAge: TimeInterval = 10
 
     func start() {
         restartLoop()
     }
 
     func menuWillOpen() {
+        generation += 1
         isOpen = true
         selectedList = initialList(for: critical)
         restartLoop()
     }
 
     func menuDidClose() {
+        generation += 1
         isOpen = false
         tracker.reset()
         cpuReady = false
@@ -86,16 +92,21 @@ import SystatCore
 
     private func refresh() async {
         let wantProcesses = isOpen
+        let startedIn = generation
         let apps = wantProcesses ? runningApps() : [:]
         let reader = machineReader
         let uid = self.uid
+        let diskMaxAge = wantProcesses ? Self.openDiskMaxAge : Self.closedDiskMaxAge
         // Reading (and running ps) happens off the main thread.
-        let (updatedReader, sample, records) = await Task.detached {
+        let (updatedReader, sample, records, readAt) = await Task.detached {
             var reader = reader
-            let sample = reader.sample(now: Date())
+            let sample = reader.sample(now: Date(), diskMaxAge: diskMaxAge)
+            let readAt = Date()
             let records = wantProcesses ? ProcessReader().read(apps: apps, currentUID: uid) : nil
-            return (reader, sample, records)
+            return (reader, sample, records, readAt)
         }.value
+        // The menu opened or closed while reading: these results belong to the old state.
+        guard startedIn == generation else { return }
 
         machineReader = updatedReader
         machine = sample
@@ -105,9 +116,9 @@ import SystatCore
         lastUpdated = sample.time
 
         guard let records, isOpen else { return }
-        let now = Date()
-        let cpu = tracker.update(records, at: now)
+        let cpu = tracker.update(records, at: readAt)
         cpuReady = tracker.isReady
+        let now = Date()
         allRows = ProcessTable.rows(from: records, cpu: cpu, currentUID: uid, selfPID: selfPID, home: home, now: now)
         applyRows(frozen: pointerOverList || now.timeIntervalSince(lastClick) < Self.clickHold)
     }
@@ -115,6 +126,9 @@ import SystatCore
     private func applyRows(frozen: Bool) {
         let now = Date()
         for kind in ListKind.allCases {
+            // Until two CPU samples exist, only other users' processes have a CPU figure; a CPU list
+            // built then would rank the wrong processes and could freeze that way under the pointer.
+            if kind == .cpu && !cpuReady { continue }
             lists[kind]?.update(with: allRows, frozen: frozen, now: now)
         }
     }

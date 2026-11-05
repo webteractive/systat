@@ -64,3 +64,10 @@ private func sample(t: Double, busy: Double = 0.1, pressure: Int32 = 1, swap: UI
     #expect(initialList(for: CriticalState(memory: true, cpu: true, disk: false)) == .memory)
     #expect(initialList(for: CriticalState()) == .memory)
 }
+
+@Test func unknownDiskIsNotCritical() {
+    var e = CriticalEvaluator()
+    var s = sample(t: 0, diskFree: 0)
+    s.diskCapacity = 0                       // no disk reading yet
+    #expect(!e.update(s).disk)
+}

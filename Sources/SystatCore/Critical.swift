@@ -46,7 +46,9 @@ public struct CriticalEvaluator: Sendable {
     public mutating func update(_ sample: MachineSample) -> CriticalState {
         state.memory = sample.pressureLevel >= Limits.pressureCritical
             || (sample.swapUsed > limits.swapBytes && sample.pressureLevel >= Limits.pressureWarning)
-        state.disk = sample.diskFree < (state.disk ? limits.diskClear : limits.diskCritical)
+        // Capacity 0 means there is no disk reading yet; that is not a full disk.
+        state.disk = sample.diskCapacity > 0
+            && sample.diskFree < (state.disk ? limits.diskClear : limits.diskCritical)
         updateCPU(sample)
         return state
     }

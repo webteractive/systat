@@ -2,6 +2,9 @@ import Foundation
 
 /// Per-process CPU % between two refreshes, as Activity Monitor shows it (share of one core).
 public struct CPUTracker: Sendable {
+    /// Samples closer together than this are ignored: the counters barely move and the ratio is noise.
+    public static let minInterval: TimeInterval = 0.5
+
     public private(set) var isReady = false
     private var previous: [ProcessIdentity: UInt64] = [:]
     private var previousTime: Date?
@@ -9,6 +12,11 @@ public struct CPUTracker: Sendable {
     public init() {}
 
     public mutating func update(_ records: [ProcessRecord], at time: Date) -> [ProcessIdentity: Double] {
+        if let previousTime, time.timeIntervalSince(previousTime) < Self.minInterval {
+            return records.reduce(into: [:]) { result, r in
+                if r.cpuTimeNanos == nil, let percent = r.psCPUPercent { result[r.identity] = percent }
+            }
+        }
         var result: [ProcessIdentity: Double] = [:]
         var current: [ProcessIdentity: UInt64] = [:]
         let wallNanos = previousTime.map { time.timeIntervalSince($0) * 1_000_000_000 } ?? 0

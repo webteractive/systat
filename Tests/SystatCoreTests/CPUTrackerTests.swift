@@ -16,3 +16,16 @@ import Testing
     #expect(second[a.identity] == 50)
     #expect(second[b.identity] == 12)
 }
+
+@Test func samplesTooCloseTogetherAreIgnored() {
+    // Two reads applied milliseconds apart (an old read landing after a reopen) would give absurd percentages.
+    var t = CPUTracker()
+    let a = record(pid: 1, comm: "a", cpuNanos: 1_000_000_000)
+    _ = t.update([a], at: now)
+    var a2 = a
+    a2.cpuTimeNanos = 1_100_000_000
+    #expect(t.update([a2], at: now.addingTimeInterval(0.01))[a.identity] == nil)
+    var a3 = a
+    a3.cpuTimeNanos = 2_000_000_000
+    #expect(t.update([a3], at: now.addingTimeInterval(2))[a.identity] == 50)
+}
