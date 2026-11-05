@@ -1,0 +1,405 @@
+# systat — design
+
+2026-11-05. Status: reviewed, waiting for approval.
+
+Decisions marked **(open)** were made while writing this document and have
+not been confirmed yet. They are listed again at the end.
+
+## What it is
+
+**systat** is a native macOS menu bar app for a quick look at the Mac's
+resources: memory, CPU and disk. Its icon turns red when one of them is
+critical, and its menu shows what is using them, with a one-click way to
+quit the heaviest processes.
+
+It has no Dock icon and no window of its own apart from Settings. It does
+not show live numbers in the menu bar; Activity Monitor already does that.
+
+Success: the icon turns red before the Mac starts to feel slow, and one
+click on the menu shows what is to blame and gets rid of it.
+
+## Goals
+
+1. A menu bar icon that turns red when any one of RAM, CPU or disk is at a
+   critical level.
+2. For RAM and CPU, the top 10 heaviest processes, each with Quit and Force
+   Quit.
+3. Telling processes with the same name apart, so the right one gets killed.
+4. Making it impossible to kill something that would freeze the Mac or log
+   the user out.
+
+## Non-goals
+
+- Notifications, sounds or badges. The red icon is the only alert.
+- Numbers or graphs in the menu bar.
+- History, charts over time, or logs. **(open)**
+- Network, battery, GPU or temperature. **(open)**
+- A process list for disk. Disk gets a bar and nothing else.
+- Killing anything automatically. systat only acts when the user clicks.
+  **(open)**
+- Quitting processes owned by another user or by root, and asking for an
+  admin password to do it. **(open)**
+- Distribution: no Developer ID signing, notarization, installer, auto-update
+  or App Store.
+
+## Anti-goals
+
+These would make systat a failure even if every feature works:
+
+- **systat itself becoming a load.** It runs exactly when the Mac is short
+  of RAM and CPU. Budget: under 1% CPU on average while the menu is closed, and
+  under about 60 MB of memory. **(open)**
+- **Killing the wrong thing.** Force Quit has no confirmation, so the row
+  clicked must be the process meant, and the list must not reorder under the
+  cursor in a way that makes the user hit the wrong row.
+- **Crying wolf.** If the icon is red during normal work, people learn to
+  ignore it. Short spikes must not turn it red.
+
+## Constraints
+
+- Swift and SwiftUI.
+- No Dock icon (`LSUIElement`).
+- Targets macOS 26 on Apple silicon. Built with Xcode 26 and Swift 6.
+- Built locally and installed into `/Applications/systat.app`, ad-hoc signed
+  only.
+- Opens at login.
+- Clear build output (`.build/`, the project's own DerivedData) when a build
+  is done.
+- No third-party dependencies unless one saves a lot of work. **(open)**
+
+## The menu bar icon
+
+A small gauge: an arc with a needle and a hub.
+
+- **Normal:** monochrome, drawn as a template image so it matches the other
+  menu bar icons in light and dark mode. Needle points low (to the left).
+- **Critical:** red `#C8232C`, needle points high (to the right). It is not a
+  template image in this state, so the red survives.
+
+SVG, 18×18 viewBox, stroke width 2, round caps:
+
+- arc: `M2.5 12.5 a6.5 6.5 0 1 1 13 0`
+- needle, normal: `M9 12.5 L6.2 7.6`
+- needle, critical: `M9 12.5 L12.6 7.2`
+- hub: circle at (9, 12.5), radius 1.6, filled
+
+The icon has two states only. It does not show which resource is critical
+or how many.
+
+## Critical limits
+
+A resource is critical when:
+
+| Resource | Critical when |
+| --- | --- |
+| Memory | macOS memory pressure is at its critical (red) level, **or** more than 4 GB of swap is in use |
+| CPU | more than 85% busy, held for 30 seconds. Short spikes do not count |
+| Disk | under 15 GB free on the data volume (`/System/Volumes/Data`) |
+
+The icon is red while at least one resource is critical.
+
+Two earlier drafts were dropped during review:
+
+- "Swap over 75% full". macOS adds swap as it needs it, so used ÷ total sits
+  high most of the time. A fixed amount is steadier.
+- "Under 10% or under 15 GB free". On a typical 228 GB disk the 10% part
+  (22.8 GB) always wins, so the 15 GB part never mattered.
+
+Details (all **open**):
+
+- **Memory pressure** is the kernel's level
+  (`kern.memorystatus_vm_pressure_level`, where 4 means critical). This is the
+  same signal behind Activity Monitor's red pressure graph.
+- **Swap in use** is the `used` figure from `vm.swapusage`.
+- **CPU busy** is the whole machine across all cores: 100% minus idle, from
+  the host CPU tick counters, measured between two samples.
+- **CPU "held for 30 seconds"**: CPU turns critical once every sample in the
+  last 30 seconds was over 85%. It clears once it has been at or under 85%
+  for 30 seconds, so it does not flap around the line.
+- **Memory and disk** have no hold time. They change slowly, and red memory
+  pressure is already sustained by nature.
+- **Disk free** is the space available for important use
+  (`volumeAvailableCapacityForImportantUsage`), which counts purgeable space
+  the way Finder does.
+- GB here means 10⁹ bytes, as Finder shows them.
+
+The limits are not editable in this version (**open**: see Settings).
+
+## The dropdown
+
+Opens when the menu bar icon is clicked. A SwiftUI `MenuBarExtra` in window
+style suits it, since the menu has bars, a switch and buttons in rows; the
+builder can choose otherwise. The panel is 380 pt wide.
+
+From top to bottom:
+
+### 1. Header
+
+- Left: a status line. When critical, a red dot and "3 resources critical"
+  in red. With one resource it reads "1 resource critical"; when none, it
+  reads "All normal" in the normal text colour, with no dot (**open**, the
+  wording).
+- Right: when it last updated, e.g. "Updated 2s ago", in secondary grey.
+
+### 2. Three bars
+
+One row each for Memory, CPU and Disk: the label on the left, a one-line
+detail on the right, and an 8 pt bar under them.
+
+| Bar | Fill | Detail line (example) |
+| --- | --- | --- |
+| Memory | memory used ÷ installed RAM | `7.9 of 8 GB · swap 4.9 of 6 GB` |
+| CPU | % busy, whole machine | `90% busy · load 17.3` |
+| Disk | space used ÷ capacity, data volume | `11 GB free of 228 GB` |
+
+- "Memory used" is the figure Activity Monitor calls Memory Used: app memory
+  + wired + compressed. **(open)**
+- "Load" is the 1-minute load average. **(open)**
+- A bar is red (`#C8232C`) when its own resource is critical, and a neutral
+  grey or the system accent colour otherwise. **(open)**
+
+### 3. Memory / CPU switch
+
+A two-segment control. It picks which list is shown below it. It opens on
+Memory. **(open)**
+
+### 4. Top 10 list
+
+Ten rows, heaviest first. Each row has:
+
+- **rank** (1–10), small and grey
+- **name** on the first line: the app's name for GUI apps, otherwise the
+  name from argv[0] (see "Telling same-name processes apart")
+- **second line**, small and grey: see "Telling same-name processes apart"
+- **value**, right-aligned in tabular figures: memory such as `833 MB` /
+  `1.2 GB`, or CPU such as `68%`
+- **actions**: Quit and Force Quit buttons; or, for a protected process, the
+  text "macOS — protected" and no buttons
+
+Rows are about 40 pt tall. Force Quit is drawn in the red accent colour.
+
+What the numbers mean (all **open**):
+
+- **Memory** per process is its physical footprint, the number Activity
+  Monitor shows in its Memory column.
+- **CPU** per process is its share of one core over the last sample interval,
+  as in Activity Monitor, so a process can show more than 100%.
+- The list covers every process on the Mac, including root and system ones,
+  because system daemons such as `fseventsd` and `WindowServer` are often
+  among the heaviest.
+- **Reading other users' processes.** Checked on macOS 26.4: a normal app
+  gets "Operation not permitted" from `proc_pid_rusage` and
+  `proc_pidinfo(PROC_PIDTASKINFO)` for root and system processes, so it
+  cannot read their footprint, resident size or CPU time directly. `/bin/ps`
+  is setuid root and can: `ps -axo pid,user,rss,%cpu,comm` lists every
+  process in about 0.1 s and 60 ms of CPU. So:
+  - the user's own processes: footprint and interval CPU through `libproc`;
+  - everyone else's: resident size and `%cpu` from one `ps` run per refresh.
+    `ps`'s `%cpu` is a decaying average rather than a strict interval figure;
+    that is close enough for ranking.
+  - `top -l 2` would give footprint for every process but costs about 1.8 s
+    and half a second of CPU per call, too heavy to run every 2 seconds.
+  - A privileged helper is out (no admin password, see Non-goals).
+- systat leaves itself out of the list.
+- **Right after the menu opens**, memory values are current but per-process
+  CPU needs two samples. The CPU list fills in on the next refresh, about 2
+  seconds later, and shows a quiet placeholder until then.
+
+**Keeping the list steady** (**open**, from the anti-goal above): when the
+pointer is over the list, or within about a second of a click, the rows do
+not reorder. Values can keep updating in place. Rows reorder again once the
+pointer leaves the list.
+
+### 5. Footer
+
+Three plain menu-style items:
+
+- **Open Activity Monitor**
+- **Settings…**
+- **Quit** (quits systat)
+
+## Quit and Force Quit
+
+- **Quit** asks the process to close. For a GUI app, the polite terminate
+  (`NSRunningApplication.terminate()`), so it can ask to save. For anything
+  else, SIGTERM.
+- **Force Quit** acts at once, with **no confirmation**: SIGKILL, or
+  `forceTerminate()` for a GUI app.
+
+**A `claude` session goes with its helpers.** Each Claude Code session
+starts helper processes, such as its MCP servers. For a `claude` row:
+
+- Quit and Force Quit signal the session and every process under it. At the
+  moment of the click, systat collects the session's descendants owned by the
+  user, then sends the same signal to all of them.
+- The row's memory and CPU figures include those helpers, so the number
+  shows what one click will free.
+- Helpers that belong to a listed `claude` session are not listed as rows of
+  their own, so the same memory is not counted twice. **(open)**
+
+Every other process is signalled on its own PID only (**open**). Killing a
+whole tree elsewhere (for example a terminal and its shells) is riskier.
+
+Behaviour around them (all **open**):
+
+- systat sends the signal to the exact PID shown in the row, not to "the
+  process named X". Before sending, it checks that the PID still belongs to
+  the same process (same start time). If the process has already gone, the
+  row disappears and nothing is sent.
+- After a Quit, the row stays and shows a small "Quitting…" state until the
+  process exits or the next few refreshes pass. If it is still running after
+  about 5 seconds, the row goes back to normal so the user can choose Force
+  Quit.
+- If the signal fails, the row shows the reason in its second line ("Not
+  permitted") instead of failing silently.
+- The menu stays open after either action, so several processes can be
+  killed in a row.
+
+## Protected processes
+
+macOS system processes (e.g. `fseventsd`, `WindowServer`, `airportd`, and
+anything else whose death would freeze the Mac or log the user out) show
+"macOS — protected" and have no kill buttons.
+
+How to decide (all **open**):
+
+1. **Not owned by the user** (root, or a system account such as
+   `_windowserver`): no kill buttons. systat could not signal these anyway
+   without admin rights. If the executable lives in an Apple system location
+   (`/System`, `/usr/libexec`, `/usr/sbin`, `/sbin`, `/usr/bin`), the row
+   says "macOS — protected". Otherwise, for example a third-party root
+   daemon, it says "system — not yours".
+2. **Owned by the user but essential to the session**: a short built-in deny
+   list, for processes whose death logs the user out or locks up the
+   session. At least `loginwindow`, which runs as the user; the builder
+   should check the user-owned system processes on a real Mac and add any
+   others that fit. These show "macOS — protected".
+3. Everything else owned by the user can be quit, including Apple apps that
+   relaunch on their own (Finder, Dock).
+
+## Telling same-name processes apart
+
+When several processes share a name, a second line tells them apart:
+
+| Process | Second line |
+| --- | --- |
+| `claude` started with `-n <name>` | the session name, e.g. `my-project` |
+| `claude` started with `--resume <id>` | `session ` + the id's first 8 characters, e.g. `session 1a2b3c4d` |
+| an app running from outside `/Applications` | its path, e.g. `/tmp/test-build` |
+
+The rest (all **open**):
+
+- **Names come from argv[0], not the executable path.** `claude` runs from
+  `~/.local/share/claude/versions/<version>`, so naming by path shows a
+  version number such as `2.1.318` (as `top` does). Use the basename of
+  argv[0], and the app name for GUI apps. For other users' processes, where
+  argv cannot be read, use the executable name `ps` gives.
+- **`claude` flags:** `-n`/`--name <name>` gives the session name;
+  `-r`/`--resume <id>` gives the id. A bare `--resume` or `-r` with no id, or
+  `--continue`/`-c`, shows `resumed` plus the project folder (next point).
+- **Every row gets a second line**, not only duplicates, so the rows line up.
+  For a row with nothing better, it is a short description for well-known
+  system processes (`fseventsd` → "File change tracker", `WindowServer` →
+  "Display server", `airportd` → "Wi-Fi daemon"), the app's name for a GUI
+  app, or else the executable's folder.
+- **A `claude` with none of those flags** shows the last folder of its
+  working directory (the project it was started in), falling back to
+  `pid <n>`.
+- **Any executable outside `/Applications`, `/System` and the usual system
+  folders** shows its path when another row has the same name. This is what
+  catches a stray test build running alongside the installed app. `claude`
+  is exempt: it always runs from outside `/Applications`, and its session
+  name is what tells its rows apart.
+- **Age**: when a process has been running for more than a day, the second
+  line ends with its age, e.g. `session 1a2b3c4d · 13 days`. Long-running
+  idle processes are often the ones worth quitting.
+
+Reading another process's arguments, working directory and start time works
+for the user's own processes; for others, show what can be read.
+
+## Refresh
+
+- Every **2 seconds** while the dropdown is open.
+- Every **5 seconds** in the background, when it is closed.
+
+To keep systat light (**open**): in the background, systat only reads the
+three machine-wide figures it needs to colour the icon. It lists processes
+only while the dropdown is open, and refreshes once immediately when the
+dropdown opens.
+
+## Settings…
+
+A small window with (**open**):
+
+- **Open at login** (on by default), through `SMAppService.mainApp`
+- the three critical limits shown read-only, as a reminder of what turns the
+  icon red
+
+Editable limits are left out of this version. Adding them later should only
+mean wiring the existing values to a settings store.
+
+## Opening at login
+
+On first launch systat registers itself as a login item with
+`SMAppService.mainApp`, and the Settings switch turns it off and on. The
+builder should confirm this works for an ad-hoc signed app in
+`/Applications`; if it does not, a LaunchAgent in `~/Library/LaunchAgents`
+is an acceptable fallback.
+
+## Build and install
+
+- Built with Xcode locally, ad-hoc signed, and copied into
+  `/Applications/systat.app`. No Developer ID, no notarization.
+- Not sandboxed (**open**): reading other processes and sending signals need
+  it.
+- A single command (a script or make target) builds the release version,
+  replaces the app in `/Applications`, and relaunches it. **(open)**
+- Clean the build output afterwards.
+
+## Visual reference
+
+Colours: panel `#F5F5F7` with a 1 px `#C9C9CE` border and
+12 pt corners; text `#1D1D1F`; secondary text `#6E6E73`; bar track
+`#E0E0E5`; switch track `#E3E3E8`; critical red `#C8232C`. The real app
+should use system colours and materials where they exist, so it fits light
+and dark mode, and keep `#C8232C` for critical.
+
+## Left to the builder
+
+- Project setup: a plain Xcode project, Swift Package, Tuist or XcodeGen.
+- How the panel is hosted (`MenuBarExtra` window style, or an `NSStatusItem`
+  with a popover or panel).
+- Which system APIs read each figure, as long as the numbers match the
+  definitions above.
+- Exact spacing, typography and colours beyond the visual reference,
+  following macOS conventions.
+- How to test. The limit logic (including the CPU hold and its clearing) and
+  the second-line naming rules are worth unit tests with fake samples; the
+  readings from the system are not.
+
+## Open decisions
+
+1. Settings holds only "Open at login" plus read-only limits; limits are not
+   editable.
+2. Processes not owned by the user never get kill buttons, and no admin
+   password is ever asked for. Third-party ones say "system — not yours".
+3. Protection for user-owned processes is a short deny list starting with
+   `loginwindow`; Finder and Dock can be quit.
+4. Every row gets a second line; `claude` without `-n` or `--resume` shows
+   its project folder; rows older than a day show their age.
+5. The list holds still while the pointer is over it.
+6. The menu stays open after Quit or Force Quit, and a Quit that has not
+   worked after 5 seconds is shown as such.
+7. CPU clears only after 30 seconds back under 85%; memory and disk have no
+   hold.
+8. Disk free counts purgeable space, as Finder does.
+9. In the background, only machine-wide figures are read; processes are
+   listed only while the menu is open.
+10. The switch opens on Memory each time.
+11. Bars are red only for the resource that is critical.
+12. systat's own budget: under 1% CPU and about 60 MB of memory.
+13. No history, no automatic killing, no network, battery or GPU.
+14. Other users' processes are read through `ps` (resident size and `ps`'s
+    `%cpu`), since a normal app cannot read them directly.
+15. Only `claude` rows take their helpers with them. Every other process is
+    signalled on its own PID, and a session's helpers are folded into its row.

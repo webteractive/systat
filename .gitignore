@@ -1,0 +1,29 @@
+# macOS
+.DS_Store
+
+# Xcode
+DerivedData/
+build/
+xcuserdata/
+*.xcuserstate
+*.xcscmblueprint
+*.xccheckout
+
+# Swift Package Manager
+.build/
+.swiftpm/
+
+# Tuist
+Derived/
+
+# Build products
+*.app
+*.dSYM/
+*.dSYM.zip
+*.ipa
+*.dmg
+
+# Local environment and tool settings
+.env
+.env.*
+.claude/settings.local.json
