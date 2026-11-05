@@ -383,7 +383,9 @@ On first launch systat registers itself as a login item with
 `SMAppService.mainApp`, and the Settings switch turns it off and on. The
 builder should confirm this works for an ad-hoc signed app in
 `/Applications`; if it does not, a LaunchAgent in `~/Library/LaunchAgents`
-is an acceptable fallback.
+is an acceptable fallback. Checked on macOS 26.4: `SMAppService.mainApp`
+registers the ad-hoc app as enabled and allowed, with no approval prompt, so
+no fallback is needed.
 
 ## Build and install
 
@@ -392,8 +394,13 @@ is an acceptable fallback.
 - Not sandboxed: the sandbox blocks reading other processes and sending them
   signals.
 - A single command (a script or make target) builds the release version,
-  replaces the app in `/Applications`, and relaunches it.
+  replaces the app in `/Applications`, and relaunches it. It is
+  `scripts/install-local.sh`.
 - Clean the build output afterwards.
+- For checking a build without clicking the menu bar, the binary also takes
+  `--sample` (one reading of the bars and both top-10 lists, as text),
+  `--snapshot <dir>` (renders the panel, both icons and Settings to PNGs),
+  `--version` and `--help`.
 
 ## Visual reference
 
