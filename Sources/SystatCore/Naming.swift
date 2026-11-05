@@ -52,7 +52,8 @@ public enum Naming {
 
     public static func detail(for r: ProcessRecord, name: String, nameIsShared: Bool, home: String, now: Date) -> String {
         let base = baseDetail(for: r, name: name, nameIsShared: nameIsShared, home: home)
-        guard let age = Format.age(since: r.startDate, now: now) else { return base }
+        // A start time of 0 means the kernel would not say (another user's process).
+        guard r.identity.startTime > 0, let age = Format.age(since: r.startDate, now: now) else { return base }
         return base + " · " + age
     }
 

@@ -46,3 +46,10 @@ import Testing
     #expect(Naming.detail(for: record(pid: 10, comm: "mystery"), name: "mystery", nameIsShared: false,
                           home: "/Users/me", now: now) == "pid 10")
 }
+
+@Test func detailOmitsAgeWhenStartTimeUnknown() {
+    var root = record(pid: 163, uid: 88, comm: "WindowServer",
+                      path: "/System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer")
+    root.identity = ProcessIdentity(pid: 163, startTime: 0)   // kernel hides other users' start times
+    #expect(Naming.detail(for: root, name: "WindowServer", nameIsShared: false, home: "/Users/me", now: now) == "Display server")
+}
