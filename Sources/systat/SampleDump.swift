@@ -7,7 +7,7 @@ enum SampleDump {
         var machine = MachineReader()
         var tracker = CPUTracker()
         var evaluator = CriticalEvaluator()
-        let reader = ProcessReader()
+        var reader = ProcessReader()
         let uid = getuid()
         _ = machine.sample(now: Date())
         _ = tracker.update(reader.read(apps: runningApps(), currentUID: uid), at: Date())

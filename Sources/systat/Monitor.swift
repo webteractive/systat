@@ -19,6 +19,10 @@ import SystatCore
     @ObservationIgnored var onCriticalChange: ((Bool) -> Void)?
 
     @ObservationIgnored private var machineReader = MachineReader()
+    @ObservationIgnored private var processReader = ProcessReader()
+    /// Running GUI apps, rebuilt only after an app launches or quits.
+    @ObservationIgnored private var apps: [Int32: AppInfo]?
+    @ObservationIgnored private var appObservers: [NSObjectProtocol] = []
     @ObservationIgnored private var evaluator = CriticalEvaluator()
     @ObservationIgnored private var tracker = CPUTracker()
     @ObservationIgnored private var allRows: [ProcessRow] = []
@@ -37,8 +41,16 @@ import SystatCore
     private static let clickHold: TimeInterval = 1
     private static let closedDiskMaxAge: TimeInterval = 30
     private static let openDiskMaxAge: TimeInterval = 10
+    /// Just under two refreshes, so `ps` runs every other refresh.
+    private static let psMaxAge: TimeInterval = 3.5
 
     func start() {
+        let center = NSWorkspace.shared.notificationCenter
+        for name in [NSWorkspace.didLaunchApplicationNotification, NSWorkspace.didTerminateApplicationNotification] {
+            appObservers.append(center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.apps = nil }
+            })
+        }
         restartLoop()
     }
 
@@ -53,6 +65,8 @@ import SystatCore
         generation += 1
         isOpen = false
         tracker.reset()
+        processReader = ProcessReader()   // free the per-process cache while closed
+        apps = nil
         cpuReady = false
         allRows = []
         lists = Self.emptyLists()
@@ -93,22 +107,28 @@ import SystatCore
     private func refresh() async {
         let wantProcesses = isOpen
         let startedIn = generation
-        let apps = wantProcesses ? runningApps() : [:]
+        if wantProcesses && apps == nil { apps = runningApps() }
+        let apps = wantProcesses ? (self.apps ?? [:]) : [:]
         let reader = machineReader
+        let processReader = self.processReader
         let uid = self.uid
         let diskMaxAge = wantProcesses ? Self.openDiskMaxAge : Self.closedDiskMaxAge
+        let psMaxAge = Self.psMaxAge
         // Reading (and running ps) happens off the main thread.
-        let (updatedReader, sample, records, readAt) = await Task.detached {
+        let (updatedReader, updatedProcessReader, sample, records, readAt) = await Task.detached {
             var reader = reader
+            var processReader = processReader
             let sample = reader.sample(now: Date(), diskMaxAge: diskMaxAge)
             let readAt = Date()
-            let records = wantProcesses ? ProcessReader().read(apps: apps, currentUID: uid) : nil
-            return (reader, sample, records, readAt)
+            let records = wantProcesses
+                ? processReader.read(apps: apps, currentUID: uid, now: readAt, psMaxAge: psMaxAge) : nil
+            return (reader, processReader, sample, records, readAt)
         }.value
         // The menu opened or closed while reading: these results belong to the old state.
         guard startedIn == generation else { return }
 
         machineReader = updatedReader
+        if records != nil { self.processReader = updatedProcessReader }
         machine = sample
         let state = evaluator.update(sample)
         if state.any != critical.any { onCriticalChange?(state.any) }

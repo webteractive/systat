@@ -155,7 +155,10 @@ From top to bottom:
 - Left: a status line. When critical, a red dot and "3 resources critical"
   in red. With one resource it reads "1 resource critical"; when none, it
   reads "All normal" in the normal text colour, with no dot.
-- Right: when it last updated, e.g. "Updated 2s ago", in secondary grey.
+- Right: when it last updated, in secondary grey. It reads "Updated just now"
+  while readings arrive on time, and counts ("Updated 5s ago", then minutes)
+  once the last reading is 3 s or more old. A label that changed every second
+  would redraw the panel every second, which cost more than all the readings.
 
 ### 2. Three bars
 
@@ -176,6 +179,10 @@ detail on the right, and an 8 pt bar under them.
 - A bar is red (`#C8232C`) when its own resource is critical, and neutral
   grey otherwise. Not the accent colour: on a blue-accent Mac three blue bars
   read as progress or selection, and grey makes the red stand out more.
+- When a reading changes, a bar eases to its new length (and into red) over
+  about 0.4 s instead of jumping. With Reduce Motion on, it jumps. The fill is
+  a Core Animation layer, so the system's render server runs the animation and
+  systat does no work per frame.
 
 ### 3. Memory / CPU switch
 
@@ -364,7 +371,20 @@ for the user's own processes; for others, show what can be read.
 To keep systat light: in the background, systat only reads the
 three machine-wide figures it needs to colour the icon. It lists processes
 only while the dropdown is open, and refreshes once immediately when the
-dropdown opens.
+dropdown opens. Also:
+
+- Disk free space is the costliest machine-wide reading and changes slowly,
+  so it is read at most every 30 s while closed and every 10 s while open.
+- `ps`, which supplies other users' processes' figures, runs every other
+  refresh while open (every 4 s). The user's own processes, the ones with
+  kill buttons, are read fresh every 2 s.
+- A process's path and arguments are read once and kept while it runs; the
+  working directory is read only for `claude` rows, which need it. The cache
+  is dropped when the menu closes.
+- The panel's views exist only while it is shown.
+
+Measured with `systat --bench` on macOS 26.4 (about 800 processes): about
+0.03% CPU with the menu closed and about 2.8% while it is open.
 
 ## Settings…
 
@@ -400,6 +420,7 @@ no fallback is needed.
 - For checking a build without clicking the menu bar, the binary also takes
   `--sample` (one reading of the bars and both top-10 lists, as text),
   `--snapshot <dir>` (renders the panel, both icons and Settings to PNGs),
+  `--bench [seconds]` (CPU used with the menu closed, then open),
   `--version` and `--help`.
 
 ## Visual reference

@@ -14,6 +14,7 @@ if arguments.contains("--help") || arguments.contains("-h") {
     Run with no arguments to start the menu bar app.
       --sample           print one reading of the bars and top-10 lists, then exit
       --snapshot <dir>   render the panel, icons and Settings to PNGs in <dir>, then exit
+      --bench [seconds]  measure CPU use with the menu closed, then open (default 30 s each), then exit
       --version          print the version
       --help             show this help
     """)
@@ -21,6 +22,10 @@ if arguments.contains("--help") || arguments.contains("-h") {
 }
 if arguments.contains("--sample") {
     exit(await SampleDump.run())
+}
+if let flag = arguments.firstIndex(of: "--bench") {
+    let seconds = flag + 1 < arguments.count ? Double(arguments[flag + 1]) ?? 30 : 30
+    exit(await Bench.run(seconds: seconds))
 }
 if let flag = arguments.firstIndex(of: "--snapshot") {
     guard flag + 1 < arguments.count else {

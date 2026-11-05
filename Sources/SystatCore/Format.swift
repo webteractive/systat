@@ -58,9 +58,24 @@ public enum Format {
         }
     }
 
+    /// Seconds after which a reading counts as stale and the header starts counting.
+    public static let staleAfter = 3
+
+    /// "Updated just now" while readings arrive on time; counts up only once they are stale,
+    /// so the header does not have to redraw every second.
     public static func updated(since: Date, now: Date) -> String {
         let seconds = max(0, Int(now.timeIntervalSince(since)))
+        if seconds < staleAfter { return "Updated just now" }
         return seconds < 60 ? "Updated \(seconds)s ago" : "Updated \(seconds / 60)m ago"
+    }
+
+    /// The header's redraw schedule for a reading at `last`: the reading itself (a TimelineView
+    /// whose entries are all in the future renders the first of them), then once a second from
+    /// `staleAfter` to a minute, then once a minute up to an hour.
+    public static func updatedTicks(after last: Date) -> [Date] {
+        let seconds = (staleAfter..<60).map(Double.init)
+        let minutes = (1...60).map { Double($0 * 60) }
+        return [last] + (seconds + minutes).map { last.addingTimeInterval($0) }
     }
 
     private static func gib(_ bytes: UInt64) -> String {

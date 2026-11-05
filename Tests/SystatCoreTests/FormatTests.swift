@@ -41,6 +41,19 @@ private let gib = Double(Units.gib)
     #expect(Format.headerStatus(criticalCount: 1) == "1 resource critical")
     #expect(Format.headerStatus(criticalCount: 3) == "3 resources critical")
     let now = Date(timeIntervalSince1970: 1_000)
-    #expect(Format.updated(since: now.addingTimeInterval(-2), now: now) == "Updated 2s ago")
+    #expect(Format.updated(since: now.addingTimeInterval(-2), now: now) == "Updated just now")
+    #expect(Format.updated(since: now.addingTimeInterval(-3), now: now) == "Updated 3s ago")
+    #expect(Format.staleAfter == 3)
     #expect(Format.updated(since: now.addingTimeInterval(-75), now: now) == "Updated 1m ago")
+}
+
+@Test func updatedTicksStartWhenStale() {
+    let last = Date(timeIntervalSince1970: 1_000)
+    let ticks = Format.updatedTicks(after: last)
+    // The reading itself comes first: a TimelineView with only future entries renders the first of them.
+    #expect(ticks.first == last)
+    #expect(ticks.dropFirst().first == last.addingTimeInterval(3))
+    #expect(ticks.contains(last.addingTimeInterval(59)))
+    #expect(ticks.contains(last.addingTimeInterval(120)))
+    #expect(!ticks.contains(last.addingTimeInterval(90)))
 }

@@ -39,11 +39,13 @@ struct PanelView: View {
                 .foregroundStyle(monitor.critical.any ? criticalRed : Color.primary)
             Spacer()
             if let last = monitor.lastUpdated {
-                TimelineView(.periodic(from: .now, by: 1)) { context in
+                // Redraws only when the text can change, i.e. once readings are stale.
+                TimelineView(.explicit(Format.updatedTicks(after: last))) { context in
                     Text(Format.updated(since: last, now: context.date))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .monospacedDigit()
+                        .frame(width: 110, alignment: .trailing)
                 }
             }
         }
@@ -75,9 +77,8 @@ struct PanelView: View {
                 placeholder("Reading processes…")
             } else {
                 ForEach(Array(rows.enumerated()), id: \.element.id) { index, display in
-                    ProcessRowView(rank: index + 1, display: display, kind: kind,
-                                   onQuit: { monitor.quit(display) },
-                                   onForceQuit: { monitor.forceQuit(display) })
+                    ProcessRowView(rank: index + 1, display: display, kind: kind, monitor: monitor)
+                        .equatable()
                         .frame(height: Self.rowHeight)
                 }
                 Spacer(minLength: 0)
@@ -113,6 +114,8 @@ private struct BarRow: View {
     let fraction: Double
     let critical: Bool
 
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
     var body: some View {
         VStack(spacing: 4) {
             HStack {
@@ -121,15 +124,8 @@ private struct BarRow: View {
                 Text(detail).foregroundStyle(.secondary).monospacedDigit()
             }
             .font(.callout)
-            GeometryReader { geo in
-                ZStack(alignment: .leading) {
-                    Capsule().fill(.quaternary)
-                    Capsule()
-                        .fill(critical ? criticalRed : Color.secondary)
-                        .frame(width: geo.size.width * min(max(fraction, 0), 1))
-                }
-            }
-            .frame(height: 8)
+            BarFill(fraction: fraction, critical: critical, animate: !reduceMotion)
+                .frame(height: 8)
         }
     }
 }

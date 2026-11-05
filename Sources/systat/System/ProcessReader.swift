@@ -17,39 +17,69 @@ import SystatCore
 /// Lists every process: libproc for the user's own, `ps` for everyone else's figures.
 /// Paths come from `proc_pidpath`, which works for every process; `ps` supplies numbers only.
 struct ProcessReader: Sendable {
+    /// What does not change during a process's life, read once per process rather than every refresh.
+    private struct Fixed: Sendable {
+        var comm: String
+        var path: String?
+        var arguments: [String]?
+        var workingDirectory: String?
+    }
+
+    private var fixed: [ProcessIdentity: Fixed] = [:]
+    private var psEntries = CachedReading<[Int32: PSEntry]>()
+
     private static let timebase: (numer: UInt64, denom: UInt64) = {
         var info = mach_timebase_info_data_t()
         mach_timebase_info(&info)
         return (UInt64(info.numer), UInt64(max(info.denom, 1)))
     }()
 
-    func read(apps: [Int32: AppInfo], currentUID: UInt32) -> [ProcessRecord] {
+    /// `psMaxAge`: other users' figures come from a `ps` run reused until this old. They are resident
+    /// size and a decaying %cpu, which move slowly; the user's own processes are read fresh every time.
+    mutating func read(apps: [Int32: AppInfo], currentUID: UInt32, now: Date = Date(),
+                       psMaxAge: TimeInterval = 0) -> [ProcessRecord] {
         let kernel = Sysctl.allProcesses()
-        let ps = Dictionary(PSParser.parse(runPS()).map { ($0.pid, $0) }, uniquingKeysWith: { first, _ in first })
-        return kernel.compactMap { k in
+        let ps = psEntries.value(now: now, maxAge: psMaxAge) {
+            Dictionary(PSParser.parse(Self.runPS()).map { ($0.pid, $0) }, uniquingKeysWith: { first, _ in first })
+        } ?? [:]
+        var seen: [ProcessIdentity: Fixed] = [:]
+        let records: [ProcessRecord] = kernel.compactMap { k in
             // The kernel's start time for other users' processes is not wall-clock time; 0 marks it unknown.
-            let identity = ProcessIdentity(pid: k.pid, startTime: k.uid == currentUID ? k.startTime : 0)
+            let own = k.uid == currentUID
+            let identity = ProcessIdentity(pid: k.pid, startTime: own ? k.startTime : 0)
             var record = ProcessRecord(identity: identity, parentPID: k.ppid, uid: k.uid, commandName: k.comm,
                                        app: apps[k.pid])
-            if k.uid == currentUID, let usage = rusage(pid: k.pid) {
+            if own, let usage = rusage(pid: k.pid) {
                 record.memoryBytes = usage.footprint
                 record.cpuTimeNanos = usage.cpuNanos
-                record.executablePath = executablePath(pid: k.pid)
-                record.arguments = arguments(pid: k.pid)
-                record.workingDirectory = workingDirectory(pid: k.pid)
             } else if let entry = ps[k.pid] {
                 record.memoryBytes = entry.rssBytes
                 record.psCPUPercent = entry.cpuPercent
-                record.executablePath = executablePath(pid: k.pid)
                 record.isApproximate = true
             } else {
                 return nil
             }
+            // Other users' identities carry no start time, so a changed short name also means a new process.
+            let info = fixed[identity].flatMap { $0.comm == k.comm ? $0 : nil } ?? readFixed(pid: k.pid, comm: k.comm, own: own)
+            seen[identity] = info
+            record.executablePath = info.path
+            record.arguments = info.arguments
+            record.workingDirectory = info.workingDirectory
             return record
         }
+        fixed = seen   // forget processes that have exited
+        return records
     }
 
-    private func runPS() -> String {
+    private func readFixed(pid: Int32, comm: String, own: Bool) -> Fixed {
+        let arguments = own ? arguments(pid: pid) : nil
+        // The working directory only names claude sessions, so other processes skip the call.
+        let isClaude = arguments?.first.map { ($0 as NSString).lastPathComponent == "claude" } ?? false
+        return Fixed(comm: comm, path: executablePath(pid: pid), arguments: arguments,
+                     workingDirectory: isClaude ? workingDirectory(pid: pid) : nil)
+    }
+
+    private static func runPS() -> String {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/ps")
         process.arguments = ["-axo", "pid=,rss=,%cpu="]
