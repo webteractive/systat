@@ -13,7 +13,7 @@ if arguments.contains("--help") || arguments.contains("-h") {
 
     Run with no arguments to start the menu bar app.
       --sample           print one reading of the bars and top-10 lists, then exit
-      --snapshot <dir>   render the panel and icons to <dir>/panel-{light,dark}.png, then exit
+      --snapshot <dir>   render the panel, icons and Settings to PNGs in <dir>, then exit
       --version          print the version
       --help             show this help
     """)
