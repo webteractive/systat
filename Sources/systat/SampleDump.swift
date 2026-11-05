@@ -32,7 +32,8 @@ enum SampleDump {
                     ? Format.memory(row.memoryBytes, approximate: row.isApproximate)
                     : row.cpuPercent.map { Format.cpu($0, approximate: row.isApproximate) } ?? "—"
                 let actions = row.protection.label ?? "Quit / Force Quit"
-                print(String(format: "%2d  %@  —  %@  %@  [%@]", rank + 1, row.name, row.detail, value, actions))
+                print(String(format: "%2d  %@  —  %@  %@  [%@]", rank + 1, PSParser.sanitized(row.name),
+                             PSParser.sanitized(row.detail), value, actions))
             }
         }
         return 0
