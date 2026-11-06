@@ -2,7 +2,7 @@
 
 Each section is the release notes for its version: `scripts/release.sh` publishes the section headed with the version it releases.
 
-## 0.1.0 — 2026-11-06
+## 0.1.0 — 2026-11-07
 
 The first release.
 
