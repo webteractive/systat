@@ -26,6 +26,20 @@ public enum Format {
         return approximate ? "≈ " + text : text
     }
 
+    /// A row's figure for the list it is in: memory, or CPU (`—` until it has one).
+    public static func listValue(for row: ProcessRow, kind: ListKind) -> String {
+        switch kind {
+        case .memory: memory(row.memoryBytes, approximate: row.isApproximate)
+        case .cpu: row.cpuPercent.map { cpu($0, approximate: row.isApproximate) } ?? "—"
+        }
+    }
+
+    /// `systat --version`: the version, plus the commit and build date when the bundle carries them.
+    public static func versionLine(version: String, commit: String?, date: String?) -> String {
+        let build = [commit, date].compactMap { $0 }.joined(separator: ", ")
+        return build.isEmpty ? "systat \(version)" : "systat \(version) (\(build))"
+    }
+
     /// The age suffix for a process running more than a day, e.g. `13 days`.
     public static func age(since start: Date, now: Date) -> String? {
         let seconds = now.timeIntervalSince(start)

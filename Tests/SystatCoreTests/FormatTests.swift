@@ -57,3 +57,22 @@ private let gib = Double(Units.gib)
     #expect(ticks.contains(last.addingTimeInterval(120)))
     #expect(!ticks.contains(last.addingTimeInterval(90)))
 }
+
+@Test func listValueShowsTheFigureForTheList() {
+    func row(memory: UInt64, cpu: Double?, approximate: Bool = false) -> ProcessRow {
+        ProcessRow(id: ProcessIdentity(pid: 42, startTime: 1), name: "x", detail: "", memoryBytes: memory,
+                   cpuPercent: cpu, isApproximate: approximate, protection: .killable, isApp: false,
+                   isClaudeSession: false)
+    }
+    #expect(Format.listValue(for: row(memory: 512 * Units.mib, cpu: 12.4), kind: .memory) == "512 MB")
+    #expect(Format.listValue(for: row(memory: 512 * Units.mib, cpu: 12.4), kind: .cpu) == "12%")
+    #expect(Format.listValue(for: row(memory: 0, cpu: nil), kind: .cpu) == "—")
+    #expect(Format.listValue(for: row(memory: 2 * Units.gib, cpu: 3, approximate: true), kind: .memory) == "≈ 2.0 GB")
+    #expect(Format.listValue(for: row(memory: 0, cpu: 3, approximate: true), kind: .cpu) == "≈ 3%")
+}
+
+@Test func versionLineNamesTheBuildWhenItKnowsIt() {
+    #expect(Format.versionLine(version: "0.1.0", commit: "a4a1e58", date: "2026-11-06") == "systat 0.1.0 (a4a1e58, 2026-11-06)")
+    #expect(Format.versionLine(version: "0.1.0", commit: "a4a1e58", date: nil) == "systat 0.1.0 (a4a1e58)")
+    #expect(Format.versionLine(version: "0.1.0", commit: nil, date: nil) == "systat 0.1.0")
+}

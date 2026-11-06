@@ -28,9 +28,7 @@ enum SampleDump {
         for kind in ListKind.allCases {
             print("\nTop \(kind == .memory ? "memory" : "CPU")")
             for (rank, row) in ProcessTable.top(rows, by: kind).enumerated() {
-                let value = kind == .memory
-                    ? Format.memory(row.memoryBytes, approximate: row.isApproximate)
-                    : row.cpuPercent.map { Format.cpu($0, approximate: row.isApproximate) } ?? "—"
+                let value = Format.listValue(for: row, kind: kind)
                 let actions = row.protection.label ?? "Quit / Force Quit"
                 print(String(format: "%2d  %@  —  %@  %@  [%@]", rank + 1, PSParser.sanitized(row.name),
                              PSParser.sanitized(row.detail), value, actions))

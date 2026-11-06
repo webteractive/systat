@@ -53,12 +53,7 @@ struct ProcessRowView: View, Equatable {
         }
     }
 
-    private nonisolated var value: String {
-        switch kind {
-        case .memory: Format.memory(row.memoryBytes, approximate: row.isApproximate)
-        case .cpu: row.cpuPercent.map { Format.cpu($0, approximate: row.isApproximate) } ?? "—"
-        }
-    }
+    private nonisolated var value: String { Format.listValue(for: row, kind: kind) }
 
     @ViewBuilder private var actions: some View {
         if display.state == .ended {

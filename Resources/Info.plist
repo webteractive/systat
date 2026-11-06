@@ -6,6 +6,8 @@
     <string>dev.inggo.systat</string>
     <key>CFBundleName</key>
     <string>systat</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
     <key>CFBundleExecutable</key>
     <string>systat</string>
     <key>CFBundlePackageType</key>

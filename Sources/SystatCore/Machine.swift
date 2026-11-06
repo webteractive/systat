@@ -18,8 +18,8 @@ public struct CPUTicks: Sendable, Equatable {
 
     /// Share of time busy (0...1) between two readings; 0 when no ticks elapsed.
     public static func busyFraction(from a: CPUTicks, to b: CPUTicks) -> Double {
-        let total = b.total &- a.total
-        guard total > 0, b.total > a.total else { return 0 }
+        guard b.total > a.total else { return 0 }
+        let total = b.total - a.total
         let idle = b.idle &- a.idle
         return max(0, min(1, 1 - Double(idle) / Double(total)))
     }

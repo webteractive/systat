@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Builds systat, installs it to /Applications/systat.app and relaunches it.
-# Local ad-hoc build only: not signed with a Developer ID, not for distribution.
+# Builds systat from this working tree, installs it to /Applications/systat.app
+# and relaunches it. Local ad-hoc build only: not signed with a Developer ID, not
+# for distribution. To install a release, run ./install.sh instead.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -10,23 +11,14 @@ dest="/Applications/$app_name.app"
 stage_root="$HOME/Library/Caches/systat-stage"
 stage="$stage_root/$app_name.app"
 
-cleanup() { rm -rf .build "$stage_root"; }
+cleanup() { rm -rf .build dist "$stage_root"; }
 trap cleanup EXIT
 
-swift build -c release --arch arm64 --product "$app_name"
-binary="$(swift build -c release --arch arm64 --show-bin-path)/$app_name"
-
-plist_version=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' Resources/Info.plist)
-binary_version=$("$binary" --version | awk '{print $2}')
-if [[ "$plist_version" != "$binary_version" ]]; then
-    echo "Version mismatch: Info.plist says $plist_version, the binary says $binary_version." >&2
-    exit 1
-fi
+scripts/build-app.sh
 
 rm -rf "$stage_root"
-mkdir -p "$stage/Contents/MacOS"
-cp "$binary" "$stage/Contents/MacOS/$app_name"
-cp Resources/Info.plist "$stage/Contents/Info.plist"
+mkdir -p "$stage_root"
+mv "dist/$app_name.app" "$stage"
 codesign --force --sign - --identifier "$bundle_id" "$stage"
 codesign --verify --deep --strict "$stage"
 
@@ -43,4 +35,4 @@ fi
 rm -rf "$dest"
 mv "$stage" "$dest"
 open "$dest"
-echo "Installed $app_name $plist_version (local ad-hoc build, not for distribution) to $dest"
+echo "Installed $("$dest/Contents/MacOS/$app_name" --version) (local ad-hoc build, not for distribution) to $dest"

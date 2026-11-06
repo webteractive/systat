@@ -38,8 +38,8 @@ click on the menu shows what is to blame and gets rid of it.
 - Killing anything automatically. systat only acts when the user clicks.
 - Quitting processes owned by another user or by root, and asking for an
   admin password to do it.
-- Distribution: no Developer ID signing, notarization, installer, auto-update
-  or App Store.
+- Auto-update or the App Store. (Developer ID signing, notarization and an
+  installer were added for the first release; see "Build and install".)
 
 ## Anti-goals
 
@@ -60,8 +60,8 @@ These would make systat a failure even if every feature works:
 - Swift and SwiftUI.
 - No Dock icon (`LSUIElement`).
 - Targets macOS 26 on Apple silicon. Built with Xcode 26 and Swift 6.
-- Built locally and installed into `/Applications/systat.app`, ad-hoc signed
-  only.
+- Installed into `/Applications/systat.app`. Releases are Developer ID signed
+  and notarized; local builds are ad-hoc signed.
 - Opens at login.
 - Clear build output (`.build/`, the project's own DerivedData) when a build
   is done.
@@ -409,19 +409,34 @@ no fallback is needed.
 
 ## Build and install
 
-- Built with Xcode locally, ad-hoc signed, and copied into
-  `/Applications/systat.app`. No Developer ID, no notarization.
+- Releases: `scripts/release.sh` bumps the version in `Resources/Info.plist`,
+  and `scripts/package.sh` builds, Developer ID signs (hardened runtime, no
+  entitlements), notarizes and staples the app and a DMG around it, with a
+  `.sha256` sidecar. They are published as GitHub releases on
+  `webteractive/systat`. `install.sh` at the repo root installs the latest
+  release: it verifies the checksum and the DMG's notarization before mounting
+  it, then the app's signature and notarization, stages the app,
+  and moves it into `/Applications` whole. The release notes are the
+  CHANGELOG.md section for the version.
+- The app icon is the menu bar gauge drawn large: white on a graphite tile,
+  the needle at rest, only the critical end of the dial red, so the Dock icon
+  never reads as an alert. It is drawn in code (`AppIcon.swift`, beside
+  `GaugeIcon`) and packed into `AppIcon.icns` by `scripts/build-app.sh`.
+- `Resources/Info.plist` is the only place the version is written. It is
+  embedded in the binary, and `scripts/build-app.sh` stamps the bundle with
+  the commit and build date that `--version` prints.
 - Not sandboxed: the sandbox blocks reading other processes and sending them
   signals.
-- A single command (a script or make target) builds the release version,
-  replaces the app in `/Applications`, and relaunches it. It is
-  `scripts/install-local.sh`.
+- For development, `scripts/install-local.sh` builds the working tree,
+  ad-hoc signs it, replaces the app in `/Applications`, and relaunches it.
 - Clean the build output afterwards.
 - For checking a build without clicking the menu bar, the binary also takes
   `--sample` (one reading of the bars and both top-10 lists, as text),
   `--snapshot <dir>` (renders the panel, both icons and Settings to PNGs),
   `--bench [seconds]` (CPU used with the menu closed, then open),
-  `--version` and `--help`.
+  `--iconset <dir>` (the app icon's PNGs, which the build packs into
+  `AppIcon.icns`),
+  `--version` (also `-v` and `version`) and `--help`.
 
 ## Visual reference
 
@@ -453,7 +468,8 @@ Settled 2026-11-05. Items marked *changed* differ from the first draft.
    them.
 2. Processes not owned by the user never get kill buttons, and no admin
    password is ever asked for. Third-party ones say "system — not yours". A
-   privileged helper needs real signing, and this app is ad-hoc signed only.
+   privileged helper was out of scope while systat was ad-hoc signed only;
+   releases are now Developer ID signed, but a helper is still not wanted.
 3. Protection for user-owned processes is a short deny list starting with
    `loginwindow`; Finder and Dock can be quit, since they relaunch. Checked
    on macOS 26.4: `loginwindow` is the only user-owned process whose death

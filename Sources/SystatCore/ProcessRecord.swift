@@ -28,7 +28,7 @@ public struct ProcessRecord: Sendable, Equatable {
     public var identity: ProcessIdentity
     public var parentPID: Int32
     public var uid: UInt32
-    /// The kernel's short command name, or the basename `ps` gives.
+    /// The kernel's short command name (`p_comm`).
     public var commandName: String
     public var executablePath: String?
     /// Readable for the user's own processes only.

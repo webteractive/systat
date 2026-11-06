@@ -1,7 +1,7 @@
 import AppKit
 import SwiftUI
 
-/// `systat --snapshot <dir>`: renders the live panel and both icons offscreen to
+/// `systat --snapshot <dir>`: renders the live panel (with both icons) and Settings offscreen to
 /// `panel-light.png`, `panel-dark.png` and `settings-light.png`, for checking the UI without clicking the menu bar.
 enum SnapshotDump {
     @MainActor static func run(directory: String) async -> Int32 {

@@ -23,7 +23,7 @@ public enum Protection: Sendable, Equatable {
             guard let path = executablePath else { return .macOS }
             return appleSystemPrefixes.contains { path.hasPrefix($0) } ? .macOS : .notYours
         }
-        let executable = executablePath.map { ($0 as NSString).lastPathComponent }
+        let executable = executablePath.map(Naming.basename)
         let denied = userDenyList.contains(name) || executable.map(userDenyList.contains) == true
         return denied ? .macOS : .killable
     }
