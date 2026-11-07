@@ -9,6 +9,7 @@ Each section is the release notes for its version: `scripts/release.sh` publishe
   - the disk image must be signed by the same developer before it's opened, and Gatekeeper must accept the new app, which also checks the certificate hasn't been revoked
   - the old app is moved aside, not deleted, and is put back if the new one doesn't verify; if that happens, the panel says why the next time it offers the update
   - one update at a time, even if one is started from the panel and another from a terminal
+  - an app on a different drive from your home folder updates itself only from a folder no other user can write to
 - Settings has a switch for the daily check and a Check Now button.
 - `systat --update` installs the newest release from a terminal, and `systat --check-update` only asks.
 - 0.1.0 has no updater: update from it once with the installer command in the README.

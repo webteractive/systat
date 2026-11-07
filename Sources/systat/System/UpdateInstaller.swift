@@ -163,13 +163,13 @@ enum UpdateInstaller {
     }
 
     /// A fresh folder for this attempt, on the target's volume so the helper's moves are renames:
-    /// the caches folder in a standard setup, otherwise a hidden folder beside the app. Folders
+    /// the caches folder in a standard setup, otherwise a private folder beside the app. Folders
     /// left by attempts that died more than a day ago are removed.
     private static func makeRunDirectory(for target: URL) throws(Failure) -> URL {
         let fm = FileManager.default
         do { try fm.createDirectory(at: stateDirectory, withIntermediateDirectories: true) } catch { throw .download }
         let parent = target.deletingLastPathComponent()
-        let root = sameVolume(stateDirectory, parent) ? stateDirectory : parent.appendingPathComponent(".systat-update")
+        let root = sameVolume(stateDirectory, parent) ? stateDirectory : try stagingRoot(beside: parent)
         let cutoff = Date().addingTimeInterval(-staleRunAge)
         for old in (try? fm.contentsOfDirectory(at: root, includingPropertiesForKeys: [.contentModificationDateKey])) ?? []
         where old.lastPathComponent.hasPrefix("run-") {
@@ -179,8 +179,30 @@ enum UpdateInstaller {
             }
         }
         let run = root.appendingPathComponent("run-\(UUID().uuidString)")
-        do { try fm.createDirectory(at: run, withIntermediateDirectories: true) } catch { throw .notWritable }
+        do {
+            try fm.createDirectory(at: run, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
+        } catch { throw .notWritable }
         return run
+    }
+
+    /// The staging folder beside an app on another volume. Only in a folder this user owns and no one
+    /// else can write to: anyone who can rename entries there could swap the staging folder, or the
+    /// helper script in it, between the checks and the swap. The folder itself must be ours, not a
+    /// link, and is closed to 0700 however it was left.
+    static func stagingRoot(beside parent: URL) throws(Failure) -> URL {
+        guard isOwnFolder(parent, closedTo: 0o022) else { throw .notWritable }
+        let root = parent.appendingPathComponent(".systat-update")
+        guard mkdir(root.path, 0o700) == 0 || errno == EEXIST,
+              isOwnFolder(root, closedTo: 0), chmod(root.path, 0o700) == 0, isOwnFolder(root, closedTo: 0o077)
+        else { throw .notWritable }
+        return root
+    }
+
+    /// A real folder (lstat, so never a symlink) owned by this user, with none of `mask`'s permission bits set.
+    private static func isOwnFolder(_ url: URL, closedTo mask: mode_t) -> Bool {
+        var info = stat()
+        guard lstat(url.path, &info) == 0 else { return false }
+        return info.st_mode & S_IFMT == S_IFDIR && info.st_uid == getuid() && info.st_mode & mask == 0
     }
 
     private static func sameVolume(_ a: URL, _ b: URL) -> Bool {

@@ -462,6 +462,12 @@ below, and the quarantine attribute is left alone rather than stripped.
 - Each attempt stages in its own `run-<uuid>` folder on the app's volume, so
   the helper's moves are renames: `~/Library/Caches/systat-update` in a
   standard setup, or `.systat-update` beside the app on another volume.
+  Beside the app only if the app's folder is the user's own and no one else
+  can write to it, since anyone who can rename entries there could swap the
+  staging folder or the helper script between the checks and the swap; the
+  staging folder must be the user's own real folder (never a link) and is
+  kept at 0700, as is each run folder. Anywhere else the update is refused
+  with the "move it to a folder you own" message.
   Folders left by attempts that died more than a day ago are removed.
 - `systat --update` runs the same install from a terminal: it stages, quits
   the running copy it is replacing (not copies elsewhere), then hands off to
