@@ -1,19 +1,24 @@
 import AppKit
 import SwiftUI
+import SystatCore
 
 /// `systat --snapshot <dir>`: renders the live panel (with both icons) and Settings offscreen to
 /// `panel-light.png`, `panel-dark.png` and `settings-light.png`, for checking the UI without clicking the menu bar.
+/// The panels show an update on offer, so its row can be checked too.
 enum SnapshotDump {
     @MainActor static func run(directory: String) async -> Int32 {
         _ = NSApplication.shared
         NSApp.setActivationPolicy(.prohibited)
         let monitor = Monitor()
+        let sample = AvailableUpdate(version: "9.9.9", releasePage: UpdateCheck.releasesPage,
+                                     dmg: UpdateCheck.releasesPage, checksum: UpdateCheck.releasesPage)
+        let updater = Updater(currentVersion: systatVersion, state: .available(sample))
         monitor.menuWillOpen()
         try? await Task.sleep(for: .seconds(4.5))   // three refreshes, so the CPU list is ready
         let pages: [(String, NSAppearance.Name, AnyView)] = [
-            ("panel-light", .aqua, AnyView(SnapshotView(monitor: monitor))),
-            ("panel-dark", .darkAqua, AnyView(SnapshotView(monitor: monitor))),
-            ("settings-light", .aqua, AnyView(SettingsView().background(Color(nsColor: .windowBackgroundColor)))),
+            ("panel-light", .aqua, AnyView(SnapshotView(monitor: monitor, updater: updater))),
+            ("panel-dark", .darkAqua, AnyView(SnapshotView(monitor: monitor, updater: updater))),
+            ("settings-light", .aqua, AnyView(SettingsView(updater: updater).background(Color(nsColor: .windowBackgroundColor)))),
         ]
         for (name, appearance, page) in pages {
             let view = NSHostingView(rootView: page)
@@ -37,6 +42,7 @@ enum SnapshotDump {
 
 private struct SnapshotView: View {
     let monitor: Monitor
+    let updater: Updater
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -45,7 +51,7 @@ private struct SnapshotView: View {
                 icon(critical: true)
             }
             .padding(14)
-            PanelView(monitor: monitor, openSettings: {})
+            PanelView(monitor: monitor, updater: updater, openSettings: {})
         }
         .background(Color(nsColor: .windowBackgroundColor))
     }

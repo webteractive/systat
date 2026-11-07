@@ -6,10 +6,12 @@ import SwiftUI
     private let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     private let popover = NSPopover()
     private let monitor: Monitor
+    private let updater: Updater
     private let openSettings: () -> Void
 
-    init(monitor: Monitor, openSettings: @escaping () -> Void) {
+    init(monitor: Monitor, updater: Updater, openSettings: @escaping () -> Void) {
         self.monitor = monitor
+        self.updater = updater
         self.openSettings = openSettings
         super.init()
         item.button?.image = GaugeIcon.image(critical: false)
@@ -30,7 +32,7 @@ import SwiftUI
         } else if let button = item.button {
             // The panel exists only while shown: a closed panel left in place would keep re-rendering
             // on every background reading, which costs more CPU than the readings themselves.
-            let panel = PanelView(monitor: monitor, openSettings: { [weak self] in
+            let panel = PanelView(monitor: monitor, updater: updater, openSettings: { [weak self] in
                 self?.popover.performClose(nil)
                 self?.openSettings()
             })

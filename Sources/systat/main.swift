@@ -21,10 +21,18 @@ if arguments.contains("--help") || arguments.contains("-h") {
       --snapshot <dir>   render the panel, icons and Settings to PNGs in <dir>, then exit
       --bench [seconds]  measure CPU use with the menu closed, then open (default 30 s each), then exit
       --iconset <dir>    write the app icon's PNGs as an iconset into <dir> (for iconutil), then exit
+      --check-update     ask GitHub whether a newer release exists, print the answer, then exit
+      --update           install the newest release in place: quits systat, swaps it, reopens it
       --version, -v      print the version, and the commit and build date of a packaged build
       --help             show this help
     """)
     exit(0)
+}
+if arguments.contains("--check-update") {
+    exit(await UpdateCommand.check())
+}
+if arguments.contains("--update") {
+    exit(await UpdateCommand.run())
 }
 if arguments.contains("--sample") {
     exit(await SampleDump.run())

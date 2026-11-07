@@ -2,6 +2,17 @@
 
 Each section is the release notes for its version: `scripts/release.sh` publishes the section headed with the version it releases.
 
+## 0.1.1 — 2026-11-07
+
+- systat updates itself. Once a day it asks GitHub for the latest release, and when there is a newer one the panel shows **Update to systat X**:
+  - the download is checked against the release's SHA-256, and the new app must be systat at the release's version, notarized and signed by the same developer as the running one
+  - the disk image must be signed by the same developer before it's opened, and Gatekeeper must accept the new app, which also checks the certificate hasn't been revoked
+  - the old app is moved aside, not deleted, and is put back if the new one doesn't verify; if that happens, the panel says why the next time it offers the update
+  - one update at a time, even if one is started from the panel and another from a terminal
+- Settings has a switch for the daily check and a Check Now button.
+- `systat --update` installs the newest release from a terminal, and `systat --check-update` only asks.
+- 0.1.0 has no updater: update from it once with the installer command in the README.
+
 ## 0.1.0 — 2026-11-07
 
 The first release.

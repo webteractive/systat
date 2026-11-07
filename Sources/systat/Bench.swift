@@ -19,7 +19,7 @@ enum Bench {
         monitor.menuWillOpen()
         let window = NSWindow(contentRect: NSRect(x: -20_000, y: -20_000, width: 380, height: 760),
                               styleMask: .borderless, backing: .buffered, defer: false)
-        window.contentView = NSHostingView(rootView: PanelView(monitor: monitor, openSettings: {}))
+        window.contentView = NSHostingView(rootView: PanelView(monitor: monitor, updater: Updater(currentVersion: systatVersion), openSettings: {}))
         window.orderFrontRegardless()
         try? await Task.sleep(for: .seconds(2))   // let the CPU list become ready
         let openStart = cpuSeconds()

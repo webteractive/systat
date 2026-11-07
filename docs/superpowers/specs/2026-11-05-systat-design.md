@@ -38,8 +38,9 @@ click on the menu shows what is to blame and gets rid of it.
 - Killing anything automatically. systat only acts when the user clicks.
 - Quitting processes owned by another user or by root, and asking for an
   admin password to do it.
-- Auto-update or the App Store. (Developer ID signing, notarization and an
-  installer were added for the first release; see "Build and install".)
+- The App Store. (Developer ID signing, notarization and an installer were
+  added for the first release, and in-app updates after it; see "Build and
+  install" and "Updates".)
 
 ## Anti-goals
 
@@ -256,8 +257,12 @@ with no confirmation. Ended rows go once the pointer leaves the list.
 
 ### 5. Footer
 
-Three plain menu-style items:
+Three plain menu-style items, with a fourth above them only when a newer
+release is available (see "Updates"):
 
+- **Update to systat X**, in semibold; while installing it reads "Updating to
+  systat X…", and after a failure it shows the reason and a link to the
+  release
 - **Open Activity Monitor**
 - **Settings…**
 - **Quit** (quits systat)
@@ -391,11 +396,77 @@ Measured with `systat --bench` on macOS 26.4 (about 800 processes): about
 A small window with:
 
 - **Open at login** (on by default), through `SMAppService.mainApp`
+- **Check for updates daily** (on by default), with the check's status and a
+  **Check Now** button (or **Update** when one is available)
 - the three critical limits shown read-only, as a reminder of what turns the
   icon red
 
 Editable limits are left out of this version. Adding them later should only
 mean wiring the existing values to a settings store.
+
+## Updates
+
+Ported from zetty's updater, with additions: the identity, team, version and
+Gatekeeper checks, the lock, the PID-and-start-time wait and the result file
+below, and the quarantine attribute is left alone rather than stripped.
+
+- Once a day, starting a minute after launch, systat fetches
+  `api.github.com/repos/webteractive/systat/releases/latest`. That one request
+  is its only network use, and the Settings switch turns it off. A failed
+  daily check changes nothing on screen; Check Now reports it.
+- The tag must be a plain `X.Y.Z` (an optional `v`) and newer than the running
+  version. A build whose version isn't one (a dev build) is never offered an
+  update.
+- Only assets named exactly `systat-<version>.dmg` and `.dmg.sha256`, at this
+  repo's download path for that tag, over https on github.com, are used.
+  Without both, the update is offered only as a link to the release page,
+  which must itself be one of this repo's release pages.
+- **Update** first checks systat can replace itself: an app run from the DMG
+  or translocated (a downloaded app opened in place) is asked to move to
+  Applications, and the app and its folder must be writable (moving a folder
+  to a new parent needs write access to the folder itself).
+- It then stages, touching nothing installed: download (refused over 200 MB),
+  SHA-256 against the sidecar (read up to 1 KB, the image hashed in 1 MB
+  chunks), check the image's own signature (this team, notarized; its
+  signing identifier comes from the file name, so it isn't pinned), so an
+  image from anyone else is never mounted, mount read-only, copy out
+  `systat.app` only if it's a real folder
+  and not a symlink, and check it meets
+  `identifier "<id>" and anchor apple generic and certificate
+  leaf[subject.OU] = "<team>" and notarized`, where `<id>` and `<team>` are
+  read from the running app's own signature, so the source names nobody. Its
+  `CFBundleShortVersionString` must equal the release's version. Both close
+  the gap a compromised release would use, since the checksum comes from the
+  same release: an old notarized systat re-tagged as new (a downgrade), or
+  another notarized app from the same team renamed `systat.app`. Last,
+  `spctl --assess`, which also checks the certificate isn't revoked: the
+  swapped-in app has no quarantine flag, so Gatekeeper wouldn't look at it on
+  launch. An ad-hoc build has no team and can't install.
+- Then a detached `sh` helper (`SwapScript`) waits for systat to quit: its
+  PID with its `ps` start time, so a reused PID doesn't hold it up. If it
+  hasn't quit in 30 s, it changes and opens nothing. It takes a `lockf` lock
+  (one swap at a time; the kernel drops it if the holder dies, and after
+  2 minutes waiting it gives up), verifies the staged app again, moves the
+  installed app aside, moves the new one in, verifies it, and on any failure
+  moves the old one back, only into an empty slot (a move onto an existing
+  folder would nest inside it). If even that fails, the work folder and the
+  old app in it are kept, and the result names where. It relaunches whatever
+  is installed at the end, so a failed update leaves a working app. The
+  installed app is never deleted
+  before its replacement verifies (zetty 0.1.40 shipped a helper that did, and
+  an interrupted copy left an app that couldn't launch).
+- The helper writes "installed X" or "failed: why" to
+  `~/Library/Caches/systat-update/result`. systat reads and removes it at
+  launch, and a failure is shown with the next offer of the update, so a swap
+  that fails after systat quit isn't silent.
+- Each attempt stages in its own `run-<uuid>` folder on the app's volume, so
+  the helper's moves are renames: `~/Library/Caches/systat-update` in a
+  standard setup, or `.systat-update` beside the app on another volume.
+  Folders left by attempts that died more than a day ago are removed.
+- `systat --update` runs the same install from a terminal: it stages, quits
+  the running copy it is replacing (not copies elsewhere), then hands off to
+  the helper; if the helper can't start, it reopens the copy it quit.
+  `--check-update` only asks.
 
 ## Opening at login
 
@@ -435,7 +506,7 @@ no fallback is needed.
   `--snapshot <dir>` (renders the panel, both icons and Settings to PNGs),
   `--bench [seconds]` (CPU used with the menu closed, then open),
   `--iconset <dir>` (the app icon's PNGs, which the build packs into
-  `AppIcon.icns`),
+  `AppIcon.icns`), `--check-update` and `--update` (see "Updates"),
   `--version` (also `-v` and `version`) and `--help`.
 
 ## Visual reference
@@ -495,7 +566,7 @@ Settled 2026-11-05. Items marked *changed* differ from the first draft.
     and neutral grey otherwise, not the accent colour.
 12. systat's own budget: under 1% CPU and about 60 MB of memory, measured on
     the installed app.
-13. No history, no automatic killing, no network, battery or GPU.
+13. No history, no automatic killing, no network, battery or GPU readings.
 14. Other users' processes are read through `ps` (resident size and `ps`'s
     `%cpu`), since a normal app cannot read them directly. *Changed
     (detail):* those values are shown with a leading `≈`.

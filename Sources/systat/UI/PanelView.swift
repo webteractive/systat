@@ -7,6 +7,7 @@ let criticalRed = Color(nsColor: GaugeIcon.red)
 /// The dropdown panel (spec: "The dropdown").
 struct PanelView: View {
     @Bindable var monitor: Monitor
+    let updater: Updater
     let openSettings: () -> Void
 
     private static let rowHeight: CGFloat = 40
@@ -97,6 +98,9 @@ struct PanelView: View {
 
     private var footer: some View {
         VStack(spacing: 0) {
+            if let update = updater.offered {
+                UpdateRow(update: update, updater: updater)
+            }
             Button("Open Activity Monitor") {
                 NSWorkspace.shared.openApplication(at: URL(fileURLWithPath: "/System/Applications/Utilities/Activity Monitor.app"),
                                                    configuration: NSWorkspace.OpenConfiguration())
@@ -105,6 +109,35 @@ struct PanelView: View {
             Button("Quit") { NSApp.terminate(nil) }
         }
         .buttonStyle(MenuItemButtonStyle())
+    }
+}
+
+/// The update on offer: a button, then progress, or what went wrong.
+private struct UpdateRow: View {
+    let update: AvailableUpdate
+    let updater: Updater
+
+    var body: some View {
+        switch updater.state {
+        case .installing:
+            HStack(spacing: 6) {
+                ProgressView().controlSize(.small)
+                Text("Updating to systat \(update.version)…").foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        case .installFailed(_, let message):
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Update failed: \(message)").font(.caption).foregroundStyle(criticalRed)
+                    .padding(.horizontal, 8)
+                Button("Download systat \(update.version)", action: updater.openReleasePage)
+            }
+        default:
+            Button(update.isInstallable ? "Update to systat \(update.version)" : "Download systat \(update.version)",
+                   action: updater.install)
+                .fontWeight(.semibold)
+        }
     }
 }
 

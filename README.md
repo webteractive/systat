@@ -24,11 +24,25 @@ The installer:
 - refuses an app whose signature or notarization doesn't verify
 - quits a running systat, replaces `/Applications/systat.app` and opens it
 
-To install a specific version, append `-s -- 0.1.0` to the `sh`. Run the same command again to update.
+To install a specific version, append `-s -- 0.1.0` to the `sh`. After that, systat updates itself (see [Updates](#updates)); running the command again also works.
 
 You can also download `systat-<version>.dmg` from [Releases](https://github.com/webteractive/systat/releases) and drag systat into Applications. Releases are Developer ID signed and notarized by Apple, so they open without a Gatekeeper warning.
 
 systat adds itself to your login items on first launch. To turn that off, open the panel, choose Settings… and switch off "Open at login".
+
+## Updates
+
+systat asks GitHub for the latest release once a day, starting a minute after it opens. When there is a newer one, the panel shows **Update to systat X**. Clicking it:
+
+- downloads the release, checks it against the release's SHA-256, and opens the disk image only if it's signed by the same developer
+- checks the new app is systat, at the version the release names, notarized and signed by the same developer as the copy you're running, and accepted by Gatekeeper
+- quits, swaps the new app into place and reopens it; if anything fails, the installed copy is put back as it was, and the panel says why next time it offers the update
+
+systat must be able to replace itself: if it's running straight from the disk image, it asks you to move it to Applications first.
+
+To turn the daily check off, open Settings… and switch off "Check for updates daily". "Check Now" checks once. From a terminal, `systat --update` does the same install, and `systat --check-update` only asks.
+
+A build that isn't Developer ID signed, such as one made with `scripts/install-local.sh`, can check for updates but can't install them; it links to the release instead. 0.1.0 has no updater, so update from it with the installer command above.
 
 **Uninstall:** switch off "Open at login", quit systat from its panel, and delete `/Applications/systat.app`.
 
@@ -65,7 +79,7 @@ systat runs when the Mac is short of memory and CPU, so it is built to stay out 
 | Closed (refreshes every 5 s) | about 0.1% | about 10 MB |
 | Open (refreshes every 2 s) | about 3% | |
 
-It makes no network connections and keeps no data, except one setting that records it has registered itself as a login item.
+Its only network use is the update check: one request a day to GitHub's API, which you can switch off. It keeps no data, except two settings: that it has registered itself as a login item, and whether to check for updates.
 
 ## Command line
 
@@ -82,6 +96,8 @@ The app's binary also answers a few flags, which are useful for checking a build
 | `--snapshot <dir>` | render the panel (light and dark) and Settings to PNGs |
 | `--bench [seconds]` | measure systat's own CPU use with the panel closed, then open |
 | `--iconset <dir>` | write the app icon's PNGs as an iconset (the build uses this to make `AppIcon.icns`) |
+| `--check-update` | ask GitHub whether a newer release exists |
+| `--update` | install the newest release in place: quits systat, swaps it, reopens it |
 | `--help` | list the flags |
 
 ## Building from source
@@ -99,12 +115,14 @@ scripts/install-local.sh      # build, ad-hoc sign, install to /Applications and
 
 Maintainers only. You need the Developer ID Application certificate in the keychain, and the `notary` notarytool profile (`xcrun notarytool store-credentials notary`, once per machine).
 
-1. Add a `## <version> — <date>` section to [CHANGELOG.md](CHANGELOG.md) and commit it. That section becomes the release notes.
+1. Rename the `## Unreleased` section of [CHANGELOG.md](CHANGELOG.md) to `## <version> — <date>` and commit it. That section becomes the release notes.
 2. Run `scripts/release.sh patch` (or `minor`, `major`, `X.Y.Z`). Add `--dry-run` to see the plan without changing anything.
    - It checks signing, the tree and the tests before it pushes anything.
    - It bumps the version in `Resources/Info.plist`, then builds, signs, notarizes and staples the app and its DMG.
    - It tags the release and publishes `systat-<version>.dmg` and its `.sha256` to GitHub.
 3. Install the published build with `./install.sh`, then delete `dist/`.
+
+The in-app updater installs a release only when it carries both `systat-<version>.dmg` and `systat-<version>.dmg.sha256`, under exactly those names. A release without them is still offered, but only as a link to its page. `release.sh` uploads both.
 
 `scripts/package.sh` does the packaging on its own:
 
