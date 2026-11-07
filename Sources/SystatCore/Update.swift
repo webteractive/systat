@@ -81,8 +81,10 @@ public enum UpdateCheck {
 
         let version = latest.description
         // Only this repo's releases: the page is what "Download systat X" opens.
+        // No "." or ".." anywhere (also when percent-encoded): a browser resolves them out of the repo.
         let page = URL(string: release.htmlURL).flatMap(onGitHub)
-            .flatMap { $0.path.hasPrefix("/\(repo)/releases/") ? $0 : nil } ?? releasesPage
+            .flatMap { $0.path.hasPrefix("/\(repo)/releases/") && !$0.pathComponents.contains { $0 == ".." || $0 == "." } ? $0 : nil }
+            ?? releasesPage
         // Allowlist: this repo's download path for this tag, over https, under the exact name
         // package.sh gives each file. Anything else is ignored rather than fetched.
         let prefix = "/\(repo)/releases/download/\(release.tagName)/"
@@ -97,8 +99,45 @@ public enum UpdateCheck {
                                dmg: asset(dmgName), checksum: asset(dmgName + ".sha256"))
     }
 
+    /// https://github.com itself: no other port, and no user or password in the URL.
     private static func onGitHub(_ url: URL) -> URL? {
-        url.scheme == "https" && url.host == "github.com" ? url : nil
+        url.scheme == "https" && url.host == "github.com" && url.port == nil && url.user == nil && url.password == nil
+            ? url : nil
+    }
+}
+
+/// Reads a response no larger than a limit, failing as soon as it goes over rather than once the
+/// whole thing has landed, so a hostile server can't fill the disk or memory.
+public enum CappedRead {
+    public struct TooLarge: Error {}
+
+    public static func data<S: AsyncSequence>(_ bytes: S, limit: Int) async throws -> Data where S.Element == UInt8 {
+        var data = Data()
+        for try await byte in bytes {
+            guard data.count < limit else { throw TooLarge() }
+            data.append(byte)
+        }
+        return data
+    }
+
+    /// Writes to `file` (replacing it) in 64 KB chunks. Over the limit it throws, leaving a partial
+    /// file for the caller to remove.
+    public static func write<S: AsyncSequence>(_ bytes: S, to file: URL, limit: Int) async throws where S.Element == UInt8 {
+        guard FileManager.default.createFile(atPath: file.path, contents: nil) else { throw CocoaError(.fileWriteUnknown) }
+        let handle = try FileHandle(forWritingTo: file)
+        defer { try? handle.close() }
+        let chunkSize = 1 << 16
+        var chunk = Data(capacity: chunkSize), total = 0
+        for try await byte in bytes {
+            total += 1
+            guard total <= limit else { throw TooLarge() }
+            chunk.append(byte)
+            if chunk.count == chunkSize {
+                try handle.write(contentsOf: chunk)
+                chunk.removeAll(keepingCapacity: true)
+            }
+        }
+        try handle.write(contentsOf: chunk)
     }
 }
 

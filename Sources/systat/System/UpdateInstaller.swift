@@ -6,7 +6,7 @@ import SystatCore
 /// signature and Gatekeeper checks, then a detached helper (`SwapScript`) swaps the bundle once the app quits.
 enum UpdateInstaller {
     enum Failure: Error, CustomStringConvertible {
-        case check, notInstallable, notSigned, notAnApp, mustMove, notWritable, download, tooLarge, checksum, mount,
+        case check, notInstallable, notSigned, notAnApp, mustMove, notWritable, sharedFolder, download, tooLarge, checksum, mount,
              imageSignature, signature, gatekeeper, wrongVersion, helper
 
         var description: String {
@@ -17,6 +17,7 @@ enum UpdateInstaller {
             case .notAnApp: "systat isn't running from an app bundle."
             case .mustMove: "Move systat into Applications, open it from there, then update."
             case .notWritable: "systat can't replace itself where it's installed. Use the installer, or move it to a folder you own."
+            case .sharedFolder: "Other users can change the folder systat is in, so it won't update itself there. Use the installer, or move it to a folder you own."
             case .download: "The download failed."
             case .tooLarge: "The download is far larger than systat, so it was refused."
             case .checksum: "The download doesn't match the release checksum."
@@ -38,17 +39,25 @@ enum UpdateInstaller {
     /// systat's DMG is about 1 MB; anything near this is not it.
     private static let maxImageBytes = 200 << 20
     private static let maxChecksumBytes = 1024
+    /// GitHub's answer for one release is a few KB.
+    private static let maxReleaseBytes = 1 << 20
     private static let staleRunAge: TimeInterval = 24 * 60 * 60
 
-    private static let session = URLSession(configuration: .ephemeral)
+    private static let session: URLSession = {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.timeoutIntervalForRequest = 30
+        configuration.timeoutIntervalForResource = 5 * 60
+        return URLSession(configuration: configuration)
+    }()
 
     @concurrent static func latest(currentVersion: String) async throws(Failure) -> AvailableUpdate? {
         var request = URLRequest(url: UpdateCheck.latestReleaseAPI, timeoutInterval: 15)
         request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
         do {
-            let (data, response) = try await session.data(for: request)
+            let (bytes, response) = try await session.bytes(for: request)
             guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw Failure.check }
-            return try UpdateCheck.evaluate(data, currentVersion: currentVersion)
+            return try UpdateCheck.evaluate(try await CappedRead.data(bytes, limit: maxReleaseBytes),
+                                            currentVersion: currentVersion)
         } catch {
             throw .check
         }
@@ -86,24 +95,20 @@ enum UpdateInstaller {
 
         let dmg = work.appendingPathComponent("update.dmg")
         do {
-            let (downloaded, response) = try await session.download(from: dmgURL)
-            defer { try? FileManager.default.removeItem(at: downloaded) }
+            let (bytes, response) = try await session.bytes(from: dmgURL)
             guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw Failure.download }
-            let size = try downloaded.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? .max
-            guard size <= maxImageBytes else { throw Failure.tooLarge }
-            try FileManager.default.moveItem(at: downloaded, to: dmg)
+            guard response.expectedContentLength <= maxImageBytes else { throw Failure.tooLarge }
+            try await CappedRead.write(bytes, to: dmg, limit: maxImageBytes)
         } catch let failure as Failure {
             throw failure
+        } catch is CappedRead.TooLarge {
+            throw .tooLarge
         } catch { throw .download }
 
         do {
             let (bytes, response) = try await session.bytes(from: checksumURL)
             guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw Failure.checksum }
-            var published = Data()
-            for try await byte in bytes {
-                published.append(byte)
-                guard published.count <= maxChecksumBytes else { throw Failure.checksum }
-            }
+            let published = try await CappedRead.data(bytes, limit: maxChecksumBytes)
             guard UpdateChecksum.matches(digest: try UpdateChecksum.sha256Hex(fileAt: dmg),
                                          published: String(decoding: published, as: UTF8.self))
             else { throw Failure.checksum }
@@ -160,6 +165,7 @@ enum UpdateInstaller {
         let fm = FileManager.default
         guard fm.isWritableFile(atPath: target.deletingLastPathComponent().path), fm.isWritableFile(atPath: target.path)
         else { throw .notWritable }
+        guard FolderTrust.onlyTrustedCanChange(target.deletingLastPathComponent()) else { throw .sharedFolder }
     }
 
     /// A fresh folder for this attempt, on the target's volume so the helper's moves are renames:
@@ -170,19 +176,25 @@ enum UpdateInstaller {
         do { try fm.createDirectory(at: stateDirectory, withIntermediateDirectories: true) } catch { throw .download }
         let parent = target.deletingLastPathComponent()
         let root = sameVolume(stateDirectory, parent) ? stateDirectory : try stagingRoot(beside: parent)
-        let cutoff = Date().addingTimeInterval(-staleRunAge)
-        for old in (try? fm.contentsOfDirectory(at: root, includingPropertiesForKeys: [.contentModificationDateKey])) ?? []
-        where old.lastPathComponent.hasPrefix("run-") {
-            if let date = try? old.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate,
-               date < cutoff {
-                try? fm.removeItem(at: old)
-            }
-        }
+        pruneStaleRuns(in: root, olderThan: Date().addingTimeInterval(-staleRunAge))
         let run = root.appendingPathComponent("run-\(UUID().uuidString)")
         do {
             try fm.createDirectory(at: run, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
         } catch { throw .notWritable }
         return run
+    }
+
+    /// Removes run folders older than `cutoff`, except one holding previous.app: the helper keeps
+    /// that when it couldn't put the old app back, and told the user it's there.
+    static func pruneStaleRuns(in root: URL, olderThan cutoff: Date) {
+        let fm = FileManager.default
+        for old in (try? fm.contentsOfDirectory(at: root, includingPropertiesForKeys: [.contentModificationDateKey])) ?? []
+        where old.lastPathComponent.hasPrefix("run-") {
+            guard !fm.fileExists(atPath: old.appendingPathComponent("previous.app").path),
+                  let date = try? old.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate,
+                  date < cutoff else { continue }
+            try? fm.removeItem(at: old)
+        }
     }
 
     /// The staging folder beside an app on another volume. Only in a folder this user owns and no one
@@ -192,9 +204,13 @@ enum UpdateInstaller {
     static func stagingRoot(beside parent: URL) throws(Failure) -> URL {
         guard isOwnFolder(parent, closedTo: 0o022) else { throw .notWritable }
         let root = parent.appendingPathComponent(".systat-update")
-        guard mkdir(root.path, 0o700) == 0 || errno == EEXIST,
-              isOwnFolder(root, closedTo: 0), chmod(root.path, 0o700) == 0, isOwnFolder(root, closedTo: 0o077)
-        else { throw .notWritable }
+        guard mkdir(root.path, 0o700) == 0 || errno == EEXIST else { throw .notWritable }
+        // Opened without following a link, so the owner check and the chmod are on this very folder.
+        let fd = open(root.path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW)
+        guard fd >= 0 else { throw .notWritable }
+        defer { close(fd) }
+        var info = stat()
+        guard fstat(fd, &info) == 0, info.st_uid == getuid(), fchmod(fd, 0o700) == 0 else { throw .notWritable }
         return root
     }
 
@@ -232,6 +248,12 @@ enum UpdateInstaller {
         process.standardInput = FileHandle.nullDevice
         process.standardOutput = FileHandle.nullDevice
         process.standardError = FileHandle.nullDevice
+        // The tools and the helper get the system's PATH, and nothing else this process inherited
+        // (an exported shell function, a DYLD variable) reaches them.
+        let inherited = ProcessInfo.processInfo.environment
+        process.environment = ["PATH": "/usr/bin:/bin:/usr/sbin:/sbin"].merging(
+            ["HOME", "USER", "LOGNAME", "TMPDIR"].compactMap { key in inherited[key].map { (key, $0) } },
+            uniquingKeysWith: { first, _ in first })
         return process
     }
 }
@@ -252,6 +274,11 @@ enum CodeSigning {
         return (identifier, team)
     }
 
+    /// Apple's markers for a Developer ID certificate: the Developer ID intermediate, and a Developer
+    /// ID Application leaf. Without them a team's development or distribution certificates also match.
+    private static let developerID =
+        "certificate 1[field.1.2.840.113635.100.6.2.6] exists and certificate leaf[field.1.2.840.113635.100.6.1.13] exists"
+
     /// This app (by signing identifier), signed with a Developer ID from this team, and notarized.
     static func requirement(identifier: String, team: String) -> String? {
         guard !identifier.isEmpty, identifier.count <= 255,
@@ -265,8 +292,11 @@ enum CodeSigning {
     /// identifier codesign takes from its file name, so it can't be pinned.
     static func imageRequirement(team: String) -> String? {
         guard team.count == 10, team.allSatisfy({ $0.isASCII && ($0.isUppercase || $0.isNumber) }) else { return nil }
-        return #"anchor apple generic and certificate leaf[subject.OU] = "\#(team)" and notarized"#
+        return #"anchor apple generic and \#(developerID) and certificate leaf[subject.OU] = "\#(team)" and notarized"#
     }
+
+    /// kSecCSEnforceRevocationChecks in CSCommon.h, which Swift doesn't import.
+    private static let enforceRevocationChecks: UInt32 = 1 << 30
 
     static func satisfies(_ bundle: URL, requirement: String) -> Bool {
         var code: SecStaticCode?
@@ -274,7 +304,10 @@ enum CodeSigning {
         guard SecStaticCodeCreateWithPath(bundle as CFURL, [], &code) == errSecSuccess, let code,
               SecRequirementCreateWithString(requirement as CFString, [], &req) == errSecSuccess, let req
         else { return false }
-        let flags = SecCSFlags(rawValue: kSecCSCheckAllArchitectures | kSecCSStrictValidate | kSecCSCheckNestedCode)
+        // Revocation is enforced here too, not left to spctl, which says yes to everything when
+        // Gatekeeper is turned off.
+        let flags = SecCSFlags(rawValue: kSecCSCheckAllArchitectures | kSecCSStrictValidate | kSecCSCheckNestedCode
+                                   | enforceRevocationChecks)
         return SecStaticCodeCheckValidity(code, flags, req) == errSecSuccess
     }
 }

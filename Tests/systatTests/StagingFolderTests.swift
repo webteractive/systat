@@ -84,3 +84,26 @@ private struct Folder {
 
     #expect(throws: UpdateInstaller.Failure.self) { try UpdateInstaller.stagingRoot(beside: folder.url) }
 }
+
+@Test func pruningKeepsARunThatHoldsTheOnlyCopyOfTheApp() throws {
+    let folder = try Folder()
+    defer { folder.cleanUp() }
+    let fm = FileManager.default
+    func runFolder(_ name: String, age: TimeInterval, backup: Bool = false) throws -> URL {
+        let url = folder.url.appendingPathComponent(name)
+        try fm.createDirectory(at: url.appendingPathComponent(backup ? "previous.app" : "update"), withIntermediateDirectories: true)
+        try fm.setAttributes([.modificationDate: Date().addingTimeInterval(-age)], ofItemAtPath: url.path)
+        return url
+    }
+    let stale = try runFolder("run-stale", age: 3 * 86_400)
+    let rescued = try runFolder("run-rescued", age: 3 * 86_400, backup: true)
+    let fresh = try runFolder("run-fresh", age: 60)
+    let other = try runFolder("keep-me", age: 3 * 86_400)
+
+    UpdateInstaller.pruneStaleRuns(in: folder.url, olderThan: Date().addingTimeInterval(-86_400))
+
+    #expect(!fm.fileExists(atPath: stale.path))
+    #expect(fm.fileExists(atPath: rescued.path), "the helper said the previous app is there")
+    #expect(fm.fileExists(atPath: fresh.path))
+    #expect(fm.fileExists(atPath: other.path))
+}

@@ -38,7 +38,7 @@ systat asks GitHub for the latest release once a day, starting a minute after it
 - checks the new app is systat, at the version the release names, notarized and signed by the same developer as the copy you're running, and accepted by Gatekeeper
 - quits, swaps the new app into place and reopens it; if anything fails, the installed copy is put back as it was, and the panel says why next time it offers the update
 
-systat must be able to replace itself: if it's running straight from the disk image, it asks you to move it to Applications first.
+systat must be able to replace itself: if it's running straight from the disk image, it asks you to move it to Applications first. It also won't update itself in a folder other users can change, such as `/Users/Shared`, or on a drive set to ignore ownership; use the installer command there instead.
 
 To turn the daily check off, open Settings… and switch off "Check for updates daily". "Check Now" checks once. From a terminal, `systat --update` does the same install, and `systat --check-update` only asks.
 

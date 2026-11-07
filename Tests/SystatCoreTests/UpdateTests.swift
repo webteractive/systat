@@ -54,6 +54,9 @@ private let download = "https://github.com/webteractive/systat/releases/download
         ("systat-0.2.0.dmg", "https://github.com/someone/else/releases/download/v0.2.0/systat-0.2.0.dmg"),
         ("systat-0.2.0.dmg", "http://github.com/webteractive/systat/releases/download/v0.2.0/systat-0.2.0.dmg"),
         ("systat-0.2.0.dmg.sha256", "https://evil.example/webteractive/systat/releases/download/v0.2.0/x"),
+        ("systat-0.2.0.dmg", "https://github.com:444/webteractive/systat/releases/download/v0.2.0/systat-0.2.0.dmg"),
+        ("systat-0.2.0.dmg", "https://x@github.com/webteractive/systat/releases/download/v0.2.0/systat-0.2.0.dmg"),
+        ("systat-0.2.0.dmg.sha256", "https://x:y@github.com/webteractive/systat/releases/download/v0.2.0/systat-0.2.0.dmg.sha256"),
     ])
     let update = try #require(try UpdateCheck.evaluate(json, currentVersion: "0.1.0"))
     #expect(update.dmg == nil && update.checksum == nil)
@@ -105,4 +108,34 @@ private let download = "https://github.com/webteractive/systat/releases/download
     """#.utf8)
     let update = try #require(try UpdateCheck.evaluate(json, currentVersion: "0.1.0"))
     #expect(update.releasePage == UpdateCheck.releasesPage)
+
+    // Nor can a path that starts on this repo and climbs out of it.
+    for page in ["https://github.com/webteractive/systat/releases/../../attacker/x",
+                 "https://github.com/webteractive/systat/releases/%2e%2e/%2e%2e/attacker/x",
+                 "https://github.com:444/webteractive/systat/releases/tag/v0.2.0"] {
+        let json = Data(#"{"tag_name": "v0.2.0", "html_url": "\#(page)", "assets": []}"#.utf8)
+        #expect(try UpdateCheck.evaluate(json, currentVersion: "0.1.0")?.releasePage == UpdateCheck.releasesPage, "\(page)")
+    }
+}
+
+private func stream(_ count: Int) -> AsyncStream<UInt8> {
+    AsyncStream { continuation in
+        for i in 0..<count { continuation.yield(UInt8(truncatingIfNeeded: i)) }
+        continuation.finish()
+    }
+}
+
+@Test func aCappedReadStopsAtTheLimit() async throws {
+    #expect(try await CappedRead.data(stream(100), limit: 100).count == 100)
+    await #expect(throws: CappedRead.TooLarge.self) { try await CappedRead.data(stream(101), limit: 100) }
+}
+
+@Test func aCappedDownloadWritesEverythingUpToTheLimit() async throws {
+    let url = FileManager.default.temporaryDirectory.appendingPathComponent("systat-capped-\(UUID().uuidString)")
+    defer { try? FileManager.default.removeItem(at: url) }
+    let count = 300_000   // spans several chunks
+    try await CappedRead.write(stream(count), to: url, limit: count)
+    #expect(try Data(contentsOf: url) == Data((0..<count).map { UInt8(truncatingIfNeeded: $0) }))
+
+    await #expect(throws: CappedRead.TooLarge.self) { try await CappedRead.write(stream(count + 1), to: url, limit: count) }
 }

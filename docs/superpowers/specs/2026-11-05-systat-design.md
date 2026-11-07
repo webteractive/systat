@@ -418,13 +418,24 @@ below, and the quarantine attribute is left alone rather than stripped.
   version. A build whose version isn't one (a dev build) is never offered an
   update.
 - Only assets named exactly `systat-<version>.dmg` and `.dmg.sha256`, at this
-  repo's download path for that tag, over https on github.com, are used.
-  Without both, the update is offered only as a link to the release page,
-  which must itself be one of this repo's release pages.
+  repo's download path for that tag, over https on github.com (no other port,
+  no user or password in the URL), are used. Without both, the update is
+  offered only as a link to the release page, which must itself be one of this
+  repo's release pages, with no `.` or `..` segment (even percent-encoded).
+- Every response is read with a cap, failing as soon as it goes over: the
+  release answer at 1 MB, the image at 200 MB, the checksum at 1 KB. Requests
+  time out after 30 s idle and 5 minutes in all.
 - **Update** first checks systat can replace itself: an app run from the DMG
   or translocated (a downloaded app opened in place) is asked to move to
   Applications, and the app and its folder must be writable (moving a folder
-  to a new parent needs write access to the folder itself).
+  to a new parent needs write access to the folder itself). The app's folder
+  and every folder above it must be changeable only by the user, root or an
+  admin: owned by the user with no group or other write, or by root with no
+  other write and group write only for wheel or admin (as `/Applications`
+  is); no ACL entry allowing anyone to add, delete or rename entries or change
+  permissions; and not on a volume that ignores ownership. The swap leaves the
+  slot empty for a moment, and anyone else who could create an entry there,
+  in `/Users/Shared` say, could put their own app in it.
 - It then stages, touching nothing installed: download (refused over 200 MB),
   SHA-256 against the sidecar (read up to 1 KB, the image hashed in 1 MB
   chunks), check the image's own signature (this team, notarized; its
@@ -434,24 +445,35 @@ below, and the quarantine attribute is left alone rather than stripped.
   and not a symlink, and check it meets
   `identifier "<id>" and anchor apple generic and certificate
   leaf[subject.OU] = "<team>" and notarized`, where `<id>` and `<team>` are
-  read from the running app's own signature, so the source names nobody. Its
+  read from the running app's own signature, so the source names nobody, plus
+  Apple's Developer ID markers (`certificate 1[field.1.2.840.113635.100.6.2.6]
+  exists and certificate leaf[field.1.2.840.113635.100.6.1.13] exists`), which
+  the image's requirement carries too, so the team's development certificates
+  don't match. The check enforces revocation. Its
   `CFBundleShortVersionString` must equal the release's version. Both close
   the gap a compromised release would use, since the checksum comes from the
   same release: an old notarized systat re-tagged as new (a downgrade), or
   another notarized app from the same team renamed `systat.app`. Last,
-  `spctl --assess`, which also checks the certificate isn't revoked: the
-  swapped-in app has no quarantine flag, so Gatekeeper wouldn't look at it on
-  launch. An ad-hoc build has no team and can't install.
-- Then a detached `sh` helper (`SwapScript`) waits for systat to quit: its
+  `spctl --assess`: the swapped-in app has no quarantine flag, so Gatekeeper
+  wouldn't look at it on launch. With Gatekeeper turned off `spctl` accepts
+  anything, which is why the revocation check above doesn't rely on it. An ad-hoc build has no team and can't install.
+- Then a detached `sh` helper (`SwapScript`) waits for systat to quit. It
+  runs with only PATH, HOME, USER, LOGNAME and TMPDIR from systat's
+  environment, sets its own PATH and calls `/bin/mv`, `/bin/rm` and
+  `/bin/sleep` by path, and ignores HUP, INT and TERM, so closing the
+  terminal that ran `systat --update` can't stop it mid-swap. It waits for systat's
   PID with its `ps` start time, so a reused PID doesn't hold it up. If it
   hasn't quit in 30 s, it changes and opens nothing. It takes a `lockf` lock
-  (one swap at a time; the kernel drops it if the holder dies, and after
+  (one swap at a time for the user, as the lock is in their caches folder;
+  the kernel drops it if the holder dies, and after
   2 minutes waiting it gives up), verifies the staged app again, moves the
   installed app aside, moves the new one in, verifies it, and on any failure
   moves the old one back, only into an empty slot (a move onto an existing
   folder would nest inside it). If even that fails, the work folder and the
-  old app in it are kept, and the result names where. It relaunches whatever
-  is installed at the end, so a failed update leaves a working app. The
+  old app in it are kept, and the result names where. At the end it relaunches
+  the installed app only if it verifies, so a failed update leaves a working
+  app and anything else in the slot is never opened; the work folder is
+  removed then, or when it holds no old app. The
   installed app is never deleted
   before its replacement verifies (zetty 0.1.40 shipped a helper that did, and
   an interrupted copy left an app that couldn't launch).
@@ -468,7 +490,8 @@ below, and the quarantine attribute is left alone rather than stripped.
   staging folder must be the user's own real folder (never a link) and is
   kept at 0700, as is each run folder. Anywhere else the update is refused
   with the "move it to a folder you own" message.
-  Folders left by attempts that died more than a day ago are removed.
+  Folders left by attempts that died more than a day ago are removed, except
+  one holding `previous.app`, the only copy left when a restore failed.
 - `systat --update` runs the same install from a terminal: it stages, quits
   the running copy it is replacing (not copies elsewhere), then hands off to
   the helper; if the helper can't start, it reopens the copy it quit.

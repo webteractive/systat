@@ -50,7 +50,8 @@ private struct Sandbox {
 
     /// Runs the helper as the app would. With no `app`, for a process that has already exited.
     @discardableResult
-    func swap(app: (pid: Int32, start: String)? = nil, quitTimeoutTenths: Int = 300, lockTimeout: Int = 120) throws -> Int32 {
+    func swap(app: (pid: Int32, start: String)? = nil, quitTimeoutTenths: Int = 300, lockTimeout: Int = 120,
+              environment: [String: String]? = nil) throws -> Int32 {
         let (pid, start): (Int32, String)
         if let app {
             (pid, start) = app
@@ -66,11 +67,15 @@ private struct Sandbox {
             quitTimeoutTenths: quitTimeoutTenths, lockTimeout: lockTimeout)
         let file = work.appendingPathComponent("swap.sh")
         try script.write(to: file, atomically: true, encoding: .utf8)
-        return try run("/bin/sh", [file.path])
+        return try run("/bin/sh", [file.path], environment: environment)
     }
 
-    @discardableResult func run(_ tool: String, _ args: [String]) throws -> Int32 {
-        let p = try Process.run(URL(fileURLWithPath: tool), arguments: args)
+    @discardableResult func run(_ tool: String, _ args: [String], environment: [String: String]? = nil) throws -> Int32 {
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: tool)
+        p.arguments = args
+        if let environment { p.environment = environment }
+        try p.run()
         p.waitUntilExit()
         return p.terminationStatus
     }
@@ -199,6 +204,40 @@ private func liveProcess(seconds: Int) throws -> (process: Process, pid: Int32, 
     #expect(box.version(at: box.target) == "0.1.0")
     #expect(box.resultText?.hasPrefix("failed: ") == true)
     #expect(box.wasRelaunched)
+}
+
+@Test func swapNeverOpensAnAppThatDoesNotVerify() throws {
+    let box = try Sandbox()
+    defer { box.cleanUp() }
+    try box.makeOldAndNew()
+    // Whatever ends up in the slot (here a tampered app, where the new one was refused too) is
+    // not this developer's app, so it is never launched as this user.
+    try Data("x".utf8).write(to: box.target.appendingPathComponent("Contents/MacOS/extra"))
+    try Data("x".utf8).write(to: box.staged.appendingPathComponent("Contents/MacOS/extra"))
+
+    try box.swap()
+
+    #expect(!box.wasRelaunched)
+    #expect(box.resultText?.hasPrefix("failed: ") == true)
+}
+
+@Test func swapIgnoresTheInheritedPath() throws {
+    let box = try Sandbox()
+    defer { box.cleanUp() }
+    try box.makeOldAndNew()
+    // A PATH whose mv, rm and sleep fail: the helper must use the system's own.
+    let bin = box.root.appendingPathComponent("bin")
+    try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
+    for tool in ["mv", "rm", "sleep"] {
+        let url = bin.appendingPathComponent(tool)
+        try "#!/bin/sh\nexit 1\n".write(to: url, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
+    }
+
+    try box.swap(environment: ["PATH": bin.path])
+
+    #expect(box.version(at: box.target) == "0.2.0")
+    #expect(box.resultText == "installed 0.2.0\n")
 }
 
 @Test func quotingSurvivesQuotesAndSpaces() {

@@ -4,7 +4,7 @@ import Testing
 
 @Test func requirementBindsTheAppAndTheTeam() {
     #expect(CodeSigning.requirement(identifier: "dev.inggo.systat", team: "2VJCCC449X")
-        == #"identifier "dev.inggo.systat" and anchor apple generic and certificate leaf[subject.OU] = "2VJCCC449X" and notarized"#)
+        == #"identifier "dev.inggo.systat" and anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] exists and certificate leaf[field.1.2.840.113635.100.6.1.13] exists and certificate leaf[subject.OU] = "2VJCCC449X" and notarized"#)
     for bad in ["", "2VJCCC449", "2VJCCC449XX", #"2VJCCC449""#, "2vjccc449x", "2VJCC 449X"] {
         #expect(CodeSigning.requirement(identifier: "dev.inggo.systat", team: bad) == nil, "\(bad)")
     }
@@ -16,7 +16,7 @@ import Testing
 @Test func theImageRequirementNamesOnlyTheTeam() {
     // The DMG's signing identifier comes from its file name, so only the team and notarization are required.
     #expect(CodeSigning.imageRequirement(team: "2VJCCC449X")
-        == #"anchor apple generic and certificate leaf[subject.OU] = "2VJCCC449X" and notarized"#)
+        == #"anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] exists and certificate leaf[field.1.2.840.113635.100.6.1.13] exists and certificate leaf[subject.OU] = "2VJCCC449X" and notarized"#)
     #expect(CodeSigning.imageRequirement(team: #"2VJCCC449""#) == nil)
 }
 
