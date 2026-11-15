@@ -5,7 +5,8 @@ import Testing
 @Test func semVerReadsReleaseTagsOnly() {
     #expect(SemVer("v1.2.3") == SemVer(major: 1, minor: 2, patch: 3))
     #expect(SemVer("0.10.0") == SemVer(major: 0, minor: 10, patch: 0))
-    for bad in ["", "v", "1.2", "1.2.3.4", "1.2.3-beta", " 1.2.3", "1.2.3/../x", "1..2", "+1.2.3", "1.2.x", "unknown"] {
+    #expect(SemVer("123456.0.0") == SemVer(major: 123456, minor: 0, patch: 0))
+    for bad in ["", "v", "1.2", "1.2.3.4", "1234567.0.0", "0.0.1234567", "1.2.3-beta", " 1.2.3", "1.2.3/../x", "1..2", "+1.2.3", "1.2.x", "unknown"] {
         #expect(SemVer(bad) == nil, "\(bad)")
     }
 }
@@ -112,7 +113,18 @@ private let download = "https://github.com/webteractive/systat/releases/download
     // Nor can a path that starts on this repo and climbs out of it.
     for page in ["https://github.com/webteractive/systat/releases/../../attacker/x",
                  "https://github.com/webteractive/systat/releases/%2e%2e/%2e%2e/attacker/x",
-                 "https://github.com:444/webteractive/systat/releases/tag/v0.2.0"] {
+                 // An encoded slash or backslash keeps "../../attacker" inside one path component.
+                 "https://github.com/webteractive/systat/releases/%2e%2e%2f%2e%2e%2fattacker",
+                 "https://github.com/webteractive/systat/releases/..%2F..%2Fattacker",
+                 "https://github.com/webteractive/systat/releases/..%5C..%5Cattacker",
+                 // Encoded twice: harmless to a browser, but nothing on a release page needs a "%".
+                 "https://github.com/webteractive/systat/releases/..%252f..%252fattacker",
+                 "https://github.com:444/webteractive/systat/releases/tag/v0.2.0",
+                 // Nothing added to the page itself, nor a page other than this tag's.
+                 "https://github.com/webteractive/systat/releases/tag/v0.2.0?next=https://attacker.example",
+                 "https://github.com/webteractive/systat/releases/tag/v0.2.0#attacker",
+                 "https://github.com/webteractive/systat/releases/tag/v0.1.0",
+                 "https://github.com/webteractive/systat/releases/new"] {
         let json = Data(#"{"tag_name": "v0.2.0", "html_url": "\#(page)", "assets": []}"#.utf8)
         #expect(try UpdateCheck.evaluate(json, currentVersion: "0.1.0")?.releasePage == UpdateCheck.releasesPage, "\(page)")
     }
@@ -138,4 +150,15 @@ private func stream(_ count: Int) -> AsyncStream<UInt8> {
     #expect(try Data(contentsOf: url) == Data((0..<count).map { UInt8(truncatingIfNeeded: $0) }))
 
     await #expect(throws: CappedRead.TooLarge.self) { try await CappedRead.write(stream(count + 1), to: url, limit: count) }
+}
+
+@Test func anAssetLinkIsTakenOnlyExactlyAsPackageNamesIt() throws {
+    // Signatures are the real guard, but only the one exact URL is ever fetched.
+    for odd in ["\(download)/v0.2.0/systat-0.2.0.dmg?x=1",
+                "\(download)/v0.2.0/systat-0.2.0.dmg#x",
+                "\(download)/v0.2.0/systat%2D0.2.0.dmg",
+                "https://github.com/webteractive/systat/releases/download/v0.2.0/./systat-0.2.0.dmg"] {
+        let json = releaseJSON(tag: "v0.2.0", assets: [("systat-0.2.0.dmg", odd)])
+        #expect(try UpdateCheck.evaluate(json, currentVersion: "0.1.0")?.dmg == nil, "\(odd)")
+    }
 }

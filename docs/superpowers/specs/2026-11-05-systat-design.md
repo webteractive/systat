@@ -407,42 +407,105 @@ mean wiring the existing values to a settings store.
 ## Updates
 
 Ported from zetty's updater, with additions: the identity, team, version and
-Gatekeeper checks, the lock, the PID-and-start-time wait and the result file
-below, and the quarantine attribute is left alone rather than stripped.
+Gatekeeper checks, the pinned build, the swap in one rename, the lock, the
+pipe the helper waits on and the result file below, and the quarantine
+attribute is left alone rather than stripped.
 
 - Once a day, starting a minute after launch, systat fetches
   `api.github.com/repos/webteractive/systat/releases/latest`. That one request
-  is its only network use, and the Settings switch turns it off. A failed
-  daily check changes nothing on screen; Check Now reports it.
+  is its only network use until the user starts an update (which downloads
+  the image and its checksum), and the Settings switch turns it off. A failed
+  daily check changes nothing on screen; Check Now reports it, naming GitHub's
+  rate limit (403 or 429), no release at all (404), and an answer that can't
+  be read (or is over 1 MB) apart from a network that can't be reached. Once
+  the image has opened, one that holds no real `systat.app`, or won't eject,
+  says so, not that it couldn't be opened.
 - The tag must be a plain `X.Y.Z` (an optional `v`) and newer than the running
   version. A build whose version isn't one (a dev build) is never offered an
   update.
 - Only assets named exactly `systat-<version>.dmg` and `.dmg.sha256`, at this
   repo's download path for that tag, over https on github.com (no other port,
   no user or password in the URL), are used. Without both, the update is
-  offered only as a link to the release page, which must itself be one of this
-  repo's release pages, with no `.` or `..` segment (even percent-encoded).
+  offered only as a link to the release page, which must be exactly this
+  tag's page on this repo, `https://github.com/webteractive/systat/releases/tag/<tag>`
+  compared as written (so no query, fragment, encoding, dot segment or other
+  page gets through); anything else links to the releases page instead. These checks keep the answer to this repo's files; they aren't what
+  makes the download safe (GitHub redirects every asset to another host, and
+  URLSession follows). The signature checks below are.
 - Every response is read with a cap, failing as soon as it goes over: the
-  release answer at 1 MB, the image at 200 MB, the checksum at 1 KB. Requests
-  time out after 30 s idle and 5 minutes in all.
-- **Update** first checks systat can replace itself: an app run from the DMG
+  release answer at 1 MB, the image at 200 MB, the checksum at 1 KB. The
+  release request gives up after 15 s with nothing coming, the downloads
+  after 30 s, and each after 5 minutes in all.
+- **Update** is refused when the slot already holds a systat newer than the
+  one offered (put there by hand while this one ran): swapped out, it would
+  then be deleted, so the user is asked to open that one instead. Compared
+  with the offered version, not the running one, so the copy a stranded
+  update left there (the offered version, disabled) is still replaced.
+- **Update** is refused when systat runs as root: the ownership checks below
+  would read the wrong owner, and the helper would open the app as root.
+- It first resolves the app's real path (links followed), and the checks and
+  the helper both use that path, so a link on the way to the app can't be
+  re-pointed between them. Then it checks systat can replace itself: an app run from the DMG
   or translocated (a downloaded app opened in place) is asked to move to
   Applications, and the app and its folder must be writable (moving a folder
   to a new parent needs write access to the folder itself). The app's folder
   and every folder above it must be changeable only by the user, root or an
-  admin: owned by the user with no group or other write, or by root with no
+  admin (another admin can already replace anything in `/Applications`
+  without the updater): owned by the user with no group or other write, or by root with no
   other write and group write only for wheel or admin (as `/Applications`
-  is); no ACL entry allowing anyone to add, delete or rename entries or change
-  permissions; and not on a volume that ignores ownership. The swap leaves the
-  slot empty for a moment, and anyone else who could create an entry there,
-  in `/Users/Shared` say, could put their own app in it.
+  is); no ACL entry allowing anyone but the user to add, delete or rename
+  entries or change permissions (a group counts even when the user is in it); and on a local volume that keeps ownership (not one set to
+  ignore it, and not a network share, which reports what its mount says
+  whatever the server lets others do), mounted by the system or the user
+  (a disk image another user attached, at a folder of theirs, holds
+  whatever owners they gave its files, the user's included). Anyone else who could add, rename or
+  remove entries there, in `/Users/Shared` say, could swap their own app in
+  between the checks and the launch. An ACL that can't be read counts as
+  one that lets others in. A locked app (Finder's Locked, the `uchg` flag,
+  the system `schg` flag, or an append-only flag, on the app or anything in it; checked again just
+  before the swap) can't be renamed, or its old copy never removed, and is asked to be unlocked rather than blamed on App
+  Management. Inherit-only ACL entries count too: they
+  grant nothing on the folder, but the folders the updater creates inside
+  would inherit them. Everything in the installed app must belong to the
+  user too (links judged as themselves), no folder in it may be changeable by
+  others, by mode (group or other write) or by ACL (they could plant a folder
+  of their own in it; a file others can write can't stop its removal, so only
+  folders are checked for that), and a folder in it that can't be read is refused,
+  since it can't be checked: swapped out, the old app is removed, and a copy
+  another user installed (one group-writable, say) would otherwise sit in the
+  run folder for good, since the user can't remove another's files. Each of
+  the three has its own message (another user owns it; others can change a
+  folder in it; part of it can't be read), and only the first says another
+  user. The swap asks again just before it exchanges anything.
+- An app run from the DMG or translocated is asked to move to Applications
+  before the volume's swap support is checked: neither can swap, and moving
+  it is what fixes both.
+- One update at a time for the user: staging starts by taking a `flock`
+  lock on `~/Library/Application Support/systat-update/lock`, held until the process
+  drops what it staged, or, once its swap is in, until the relaunch helper
+  is done checking and opening the new version: the helper inherits the
+  lock (its descriptor 3), and lets go of it before an alert (the kernel
+  drops it once no holder is left).
+  Another update holding it, from the panel and a terminal at once, fails
+  this one within half a second (a lock held only for a moment, by a
+  probe, isn't another update) with "Another update is in progress" (a second click in
+  the panel while it installs does nothing); a lock it can't open or take for any other reason fails it too, saying so. The lock is per
+  user: two admins updating a shared `/Applications` copy at once aren't
+  serialized, which gives neither of them anything admin access doesn't
+  already give.
 - It then stages, touching nothing installed: download (refused over 200 MB),
   SHA-256 against the sidecar (read up to 1 KB, the image hashed in 1 MB
-  chunks), check the image's own signature (this team, notarized; its
+  chunks; a sidecar that can't be fetched, or an image that can't be read
+  back, is a failed download, not a mismatch), check the image's own signature (this team, notarized; its
   signing identifier comes from the file name, so it isn't pinned), so an
-  image from anyone else is never mounted, mount read-only, copy out
+  image from anyone else is never mounted, mount read-only (and unmount it
+  after, retrying a busy volume, or fail: a run folder with an image still
+  mounted in it can't be removed), copy out
   `systat.app` only if it's a real folder
-  and not a symlink, and check it meets
+  and not a symlink (without ACLs, with group and other write removed, and
+  with no setuid or setgid bit, since the code seal doesn't cover
+  permissions; `ditto` drops those bits itself when not run as root), and
+  check it meets
   `identifier "<id>" and anchor apple generic and certificate
   leaf[subject.OU] = "<team>" and notarized`, where `<id>` and `<team>` are
   read from the running app's own signature, so the source names nobody, plus
@@ -457,44 +520,212 @@ below, and the quarantine attribute is left alone rather than stripped.
   `spctl --assess`: the swapped-in app has no quarantine flag, so Gatekeeper
   wouldn't look at it on launch. With Gatekeeper turned off `spctl` accepts
   anything, which is why the revocation check above doesn't rely on it. An ad-hoc build has no team and can't install.
-- Then a detached `sh` helper (`SwapScript`) waits for systat to quit. It
-  runs with only PATH, HOME, USER, LOGNAME and TMPDIR from systat's
-  environment, sets its own PATH and calls `/bin/mv`, `/bin/rm` and
-  `/bin/sleep` by path, and ignores HUP, INT and TERM, so closing the
-  terminal that ran `systat --update` can't stop it mid-swap. It waits for systat's
-  PID with its `ps` start time, so a reused PID doesn't hold it up. If it
-  hasn't quit in 30 s, it changes and opens nothing. It takes a `lockf` lock
-  (one swap at a time for the user, as the lock is in their caches folder;
-  the kernel drops it if the holder dies, and after
-  2 minutes waiting it gives up), verifies the staged app again, moves the
-  installed app aside, moves the new one in, verifies it, and on any failure
-  moves the old one back, only into an empty slot (a move onto an existing
-  folder would nest inside it). If even that fails, the work folder and the
-  old app in it are kept, and the result names where. At the end it relaunches
-  the installed app only if it verifies, so a failed update leaves a working
-  app and anything else in the slot is never opened; the work folder is
-  removed then, or when it holds no old app. The
-  installed app is never deleted
-  before its replacement verifies (zetty 0.1.40 shipped a helper that did, and
-  an interrupted copy left an app that couldn't launch).
-- The helper writes "installed X" or "failed: why" to
-  `~/Library/Caches/systat-update/result`. systat reads and removes it at
-  launch, and a failure is shown with the next offer of the update, so a swap
-  that fails after systat quit isn't silent.
+  Before any of these checks, the requirement is pinned to this very build:
+  `and (cdhash H"…" or …)`, one code directory hash per architecture of its
+  executable (each architecture is checked on its own and matches its own).
+  The signature check and every later one use the pinned requirement, so
+  nothing put in the staged app's place during or after these checks, even
+  another notarized systat, can be swapped in or opened. A staging that fails removes its run folder the
+  way pruning does, unmounting an image left mounted in it.
+- Then systat swaps it in itself, before it quits, still holding the lock:
+  it checks the installed app is still a real folder where it was, and the
+  very one the checks were made on (same device and inode: another bundle
+  put at that path meanwhile would be swapped out and removed) ("systat was
+  moved, replaced or deleted while the update was being prepared"), and the staged
+  app is one too and meets the pinned requirement ("changed after it was
+  checked"; both asked of the path then, with `lstat`, not from a URL's
+  cached answers, since `RENAME_SWAP` would swap a link in as readily), then
+  writes a `swapped` mark in the run folder naming the slot, the pinned
+  build and the unpinned requirement (or fails, changing nothing):
+  from here on the run folder may hold the only copy of the old app. Then
+  it exchanges them in one rename
+  (`renamex_np` with `RENAME_SWAP`), so the slot is never empty and the old
+  app ends up where the staged one was. An exchange refused with `EPERM` is
+  macOS's App Management, which attributes `systat --update` to the
+  terminal it runs in: the message says to allow that terminal or update
+  from the panel. Moving a running app's bundle is fine: its code is
+  already mapped. It checks the app now in place against the pinned
+  requirement, and if that fails it exchanges them back ("didn't verify once
+  in place, so the old one was put back"). If even that fails, the app in
+  place is made unopenable (its executable set to mode 0, so neither Finder
+  nor the login item can start it, while the app can still be thrown away
+  like any other; never through a link, which would close whatever it
+  points at), the old app is kept as `previous.app` in the work folder, and
+  the message names the new version's path and where the old one is (or
+  says it couldn't be kept, if it is gone), says the new one "may not work"
+  rather than "was disabled" if the mode change failed, and, for a copy
+  outside `/Applications`, that the installer installs to `/Applications`.
+  systat is still running then, so the panel shows it, as a note like the
+  helper's (no later check replaces it; Update isn't offered straight away,
+  while the note says to use the installer, and comes back with the next
+  check, since another update can replace the disabled copy), and it is
+  written to the result file too: the login item can't start the disabled copy, and the message would
+  otherwise go when systat quits. The installer
+  command opens such an app up before it removes it (as it does one an
+  earlier build closed by its `Contents/MacOS` folder). Whatever removes a
+  run folder later opens such an app up first, and unmounts an image left
+  mounted in it. The
+  installed app is never deleted before its replacement verifies (zetty
+  0.1.40 shipped a helper that did, and an interrupted copy left an app that
+  couldn't launch).
+- A running app can't open a second copy of itself, so an `sh` helper
+  (`RelaunchScript`) reopens it. It starts before the swap (`posix_spawn`,
+  in a session of its own, so a terminal's Ctrl-C or hang-up or a kill
+  aimed at systat's process group never reaches it), with its stdin a pipe
+  from systat, /dev/null for output, the update lock as descriptor 3 (from
+  a copy numbered above 3, as a dup onto itself would leave it
+  close-on-exec; it lets go of it before an alert, which may stay up for
+  hours and says to run the installer) and no other file systat has open, and
+  acts only on that pipe: systat writes `go` once
+  the swap is in, and a failed swap closes the pipe without it, so the
+  helper exits having done nothing. After `go` it reads until end of file,
+  which comes when systat exits, however it exits: systat holds the write
+  end until then (close-on-exec, and never handed to another process: the
+  tools systat runs through Foundation's `Process` get no file it didn't
+  pass them, so the moment before close-on-exec is set leaks nothing) and
+  ignores SIGPIPE on it; a helper let go is reaped off the main thread. No clock, locale or process list is involved (an
+  earlier version compared `ps` start times, which print in the locale and
+  time zone, and so never matched when the app's environment and the
+  helper's differed). Then it waits up to 2 s more while systat's PID is
+  still alive, so LaunchServices sees it gone; a zombie or a reused PID only
+  delays the open. It is passed with `sh -c`, never written to a file, so
+  nothing on disk can be changed between the app's checks and its run. It
+  never changes the app in place, so being cut short leaves what's
+  installed as it was. It gets a fixed PATH and only
+  HOME, USER, LOGNAME and TMPDIR from systat's environment, ignores HUP, INT
+  and TERM (its first line), sets its PATH again and calls every tool by
+  path. It opens the app in place only if it meets the pinned requirement
+  (checked twice a second apart before it gives up, so a `codesign` killed
+  when memory is short doesn't cost the open), and removes the work folder.
+  It removes the work folder only then, even when it has nothing to open
+  (`systat --update` with no copy running): the folder holds the old app,
+  the only working copy left if the new one isn't in place.
+  Otherwise it opens nothing and changes nothing: what's in place was put
+  there after systat quit (by the installer, or another update), or failed
+  its check for some passing reason, and either way disabling it would
+  leave the user with an app that can't start and no way to see why. The
+  old app stays in the work folder, named in the note (or the note says it
+  is gone), until pruning finds a working systat in place. A refusal, or an
+  open that fails, is written as "failed: why" (with `printf`, since sh's
+  `echo` would read a backslash in a path as an escape) to
+  `~/Library/Application Support/systat-update/result` (in place of whatever
+  is there, so a link left at that path is replaced, not written through;
+  systat writes its own notes the same way, creating the file afresh without
+  following a link), and shown at once in
+  an alert (`osascript`, the message passed as an argument, never as
+  script): the note waits for systat's next launch, which may not come
+  soon. The open command is quoted word by word. If the helper is gone by
+  the time systat writes `go`, the write fails (it is checked), and systat
+  writes the note itself if the helper was to reopen it: the new version is
+  installed but nothing will. Any note left from an earlier update is cleared once the next
+  update's swap is in, not before: a swap refused changed nothing, so the
+  note still stands. While systat runs on after the swap, its
+  old process reads any resources from the new bundle; systat has one
+  executable and no frameworks, so nothing it loads late can mismatch.
+- systat reads that result file at launch (and the one 0.1.1 kept in
+  `~/Library/Caches/systat-update`, where its helper reports the update to
+  this version), and keeps both until the note is dismissed or the next
+  update's swap goes in, so quitting before reading it loses nothing.
+  It reads only a regular file of the user's own,
+  never through a link, never waiting on a pipe, and at most 4 KB, since
+  this is at launch on the main thread; an empty one hides no other. A
+  path in it can hold anything a file name can, so control characters (C0
+  and C1) and format characters (which reverse how the line reads, or hide)
+  are dropped, as is what isn't UTF-8 (a note cut short mid-character), and
+  a tab, line break, or line or paragraph separator becomes a space. It
+  shows the failure
+  in the panel and in Settings as a note of its own, whatever the update
+  state (often it is the new version, opened by hand, and up to date), and
+  apart from any later offer, which was never tried, with a button that
+  dismisses it and removes its files. An update refused, at once (another
+  one running, say) or at the swap (App Management, say), leaves the note:
+  it put nothing right. Failures before it quits are shown at once. A check
+  already waiting on GitHub when an update starts leaves the install, or
+  how it failed, alone; one that starts after a failure replaces it with
+  the offer, as the README says ("until the next check"). The `systat-update` folder is kept at 0700
+  (closed if it was left open), is never used through a link (it is opened
+  without following one, and its owner checked), and, like the app's, it
+  and every folder above it must be changeable only by the user, root or an
+  admin, since the staged app can live there; one that can't be set up, or
+  can't hold a run folder, has its own message, not the app folder's.
+- The app's volume must be able to exchange two folders in one rename
+  (`VOL_CAP_INT_RENAME_SWAP`; APFS can, HFS+ can't). That is checked with
+  the folder checks, before anything is downloaded.
 - Each attempt stages in its own `run-<uuid>` folder on the app's volume, so
-  the helper's moves are renames: `~/Library/Caches/systat-update` in a
-  standard setup, or `.systat-update` beside the app on another volume.
+  the swap is a rename: `~/Library/Application Support/systat-update` in a
+  standard setup, or `.systat-update` beside the app on another volume. Not
+  in Caches, which cleaner apps empty: a run folder can hold the only copy
+  of the app. Each update also clears out 0.1.1's
+  `~/Library/Caches/systat-update`: its stale runs and lock, and the folder
+  once nothing is left (a run holding `previous.app` stays, and so does its
+  result until the note is dismissed or the next update goes in: a 0.1.1
+  helper may write it after launch, and after an update that worked it
+  writes a line that is never shown, so never dismissed), and only if it is the user's own real folder that no one else
+  can change.
   Beside the app only if the app's folder is the user's own and no one else
   can write to it, since anyone who can rename entries there could swap the
-  staging folder or the helper script between the checks and the swap; the
+  staging folder or the app in it between the checks and the swap; the
   staging folder must be the user's own real folder (never a link) and is
-  kept at 0700, as is each run folder. Anywhere else the update is refused
+  kept at 0700, as is each run folder, and is refused if it holds anything
+  someone else owns (left open before, it could hold a planted entry that
+  pruning would delete into) or carries an ACL entry that opens it. Each
+  run folder is checked the same way once created, in case it inherited
+  one. Anywhere else the update is refused
   with the "move it to a folder you own" message.
   Folders left by attempts that died more than a day ago are removed, except
-  one holding `previous.app`, the only copy left when a restore failed.
+  one whose app may be the only working copy of systat. Only real folders
+  are looked at: a `run-` entry that is a link is never followed (removing
+  it would unmount whatever is mounted at its target's `mount`). A run
+  marked `swapped` is kept until its old app (`previous.app`, or
+  `systat.app` if renaming it failed or the helper refused) is a leftover:
+  when there's no app left, when the run holds the pinned build named in
+  the mark (it never went in), or when the slot holds a working systat,
+  one that meets the mark's unpinned requirement and whose executable can
+  start (permissions aren't sealed, so an app whose executable only lost
+  its execute bits still verifies; a disabled one, at mode 0, can't be read
+  and fails either way).
+  That covers the update that went in, and the slot put right later by the
+  installer or another update. A mark that can't be read keeps the run.
+  0.1.1 marked nothing, so a run it left holding `previous.app` stays: which
+  slot it came from isn't known.
+- Every tool the updater runs (`codesign`, `hdiutil`, `ditto`, `spctl`,
+  `chmod`) is stopped after 2 minutes and counts as failed, so a hung tool
+  or unmount can't hold the lock and the "Updating…" state until systat
+  quits. The revocation check is not one of those tools: Security.framework
+  makes it in-process, under its own network timeouts, not this limit.
+- Once the swap is in, systat asks AppKit to quit. If that is cancelled (a
+  modal sheet that refuses, say), it runs on holding the lock: the panel
+  keeps showing "Updating…" with no button (a click would do nothing), and
+  `systat --update` is refused with "Another update is in progress"; the
+  helper waits for it, and opens the new version once it does quit.
 - `systat --update` runs the same install from a terminal: it stages, quits
-  the running copy it is replacing (not copies elsewhere), then hands off to
-  the helper; if the helper can't start, it reopens the copy it quit.
+  the running copy it is replacing (matched by real path, however it was
+  opened; copies elsewhere keep running), and looks again once it has quit
+  (a copy opened meanwhile, by its login item say, would have its bundle
+  swapped out from under it), then starts the helper and swaps, and the helper opens
+  the new app once the command exits, only if a copy was running (otherwise
+  it only removes the work folder, once the new app in place checks out); if
+  the swap fails, it reopens the copy it quit, unless what's in place is a
+  new version that failed its check, or isn't the copy it quit (it notes
+  which file that was, and pins its build by code directory hash, before
+  quitting it), or no longer is that build or can't start (or its build
+  couldn't be read before quitting it); then it says it wasn't opened again,
+  unless the error says what is in place (a stranded update). An app replaced during the download, which the swap
+  then refuses, was what it quit, so that one is reopened.
+  While it downloads and checks the update, Ctrl-C, Ctrl-\, a closed
+  terminal or TERM stops it once the step under way ends (the download is
+  cancelled, and a slow `spctl` or `codesign` run is ended at once; the
+  app's own signature check, in-process, runs to its end), and staging removes
+  its run folder (ejecting an image it attached), so nothing is left behind
+  ("Stopped; nothing was changed"). Those four are watched before they are
+  ignored, so none is lost in between, and once the download is checked
+  they stay ignored, so none can end it with the update staged and left
+  behind. From just before it quits the running copy until it exits it
+  also ignores Ctrl-Z, a background job's terminal output or input (TTOU,
+  TTIN) and a broken pipe, as the installer does (it never turns any of
+  them back on: its last message and output, written out at exit, mustn't
+  meet them), any of which would leave systat quit and not reopened. When the copy it
+  quit is gone after a failed swap, it says so.
   `--check-update` only asks.
 
 ## Opening at login
@@ -514,9 +745,176 @@ no fallback is needed.
   entitlements), notarizes and staples the app and a DMG around it, with a
   `.sha256` sidecar. They are published as GitHub releases on
   `webteractive/systat`. `install.sh` at the repo root installs the latest
-  release: it verifies the checksum and the DMG's notarization before mounting
+  release, or the version given; with none given, it refuses a latest
+  release older than the systat in place, even one an update disabled
+  (made readable, never runnable, so it can be verified), or older than a
+  systat that verifies elsewhere in the home folder (as Spotlight finds
+  it, read NUL-separated so a name holding a line break can't slip in a
+  second path, and only whole paths in the home folder that are their own
+  real paths, with no link another user could swap between checks; none in
+  ~/Public/Drop Box, which takes anyone's files; none in the
+  Trash, nor the updater's or installer's own work copies) or running from anywhere, which it would quit, opening the older
+  latest in its place. Either counts only if it is wholly the user's, in
+  folders no one else can change (one another user put in ~/Public/Drop
+  Box, or one run from /Users/Shared, could be anything, and could hang
+  the check), and is opened up first as the copy in place is. Running
+  copies are looked at before the download and again before each quit (a
+  copy started by a relative path is placed by its own working folder, one
+  started through a link, under any name, by the executable it runs, and
+  one started with macOS's own arguments counts as the app, as main.swift
+  reads them; a command-line mode never does);
+  the copy in place, if this quit already asked it to go, is given up to
+  5 s to, then reopened, or the message says it may yet close and to
+  reopen it. All this because the latest can be set back and would
+  quietly downgrade it; each refusal says how to ask for that version by
+  name. It verifies the checksum and the DMG's notarization before mounting
   it, then the app's signature and notarization, stages the app,
-  and moves it into `/Applications` whole. The release notes are the
+  and moves it into `/Applications` whole (a copy, when the home folder is on
+  another volume; the check after the move catches a broken result). Both signatures must be
+  systat's team's, and `codesign --check-notarization` asks Apple online
+  (`spctl` says yes to everything with Gatekeeper off). It refuses to run as
+  root, and checks it can replace the copy in place (the folder writable,
+  nothing in the app another user's, nothing locked, and a folder made and
+  removed inside it, which macOS's App Management refuses a terminal it
+  hasn't allowed) before it quits systat. If the old copy still won't go,
+  it keeps the new one in its work folder, says what is left in place
+  (intact, or possibly broken), and opens the old one again if systat was
+  running and it still works. Removing it, too, adds no execute bit to a
+  file, so a disabled executable stays unrunnable if the removal fails. The
+  probe can't be cut short by Ctrl-C or Ctrl-\: left behind, it would break
+  the app's seal.
+  It clears group and other write and setuid bits from the copy, as the
+  updater does. Ctrl-C or Ctrl-\ before it quits systat ends it cleanly;
+  from quitting systat until it ends, they are ignored, and so
+  are Ctrl-Z, TERM and a background job's terminal output or input, as
+  `systat --update` ignores them, and a closed terminal can't stop it opening systat (its
+  output then fails, which it ignores). A broken pipe (its output piped
+  to a reader that goes away) is ignored throughout: a write that then
+  fails ends it through its cleanup, or, in the critical part, is ignored
+  too. Before it is checked, the staged copy
+  is pinned by the code directory hash of each architecture (read from
+  `codesign -d`), which covers its Info.plist and so its version, and every
+  check is made against that pin. Once systat has quit, it verifies the staged copy again against
+  that pin (a second try a second later, as for the check after the move)
+  before removing the old one: one gone, changed or replaced
+  meanwhile installs nothing and, if
+  systat was running, opens the copy in `/Applications` again, only if it
+  verifies as systat and its executable can run (one with its execute bits
+  cleared still verifies). If there is no working copy there, the message says to run the
+  installer again; if it won't open, to open systat yourself. Before quitting systat it opens up the copy
+  in place for its owner (`u+rwX`), so `find` and the probe can check it:
+  no file gets an execute bit it didn't have, so an executable the updater
+  disabled stays unrunnable if the install stops. A last check after the move (the pinned build) decides whether the copy is opened; one that fails is
+  taken out of the way (below), not opened, with a message to run the installer again. The whole script is one
+  function called on its last line, in braces (read whole before it runs),
+  so a download cut short anywhere under `curl | sh` runs nothing, not even
+  `main` without the version asked for, and it sets its own PATH, drops
+  exported shell functions (stopping, and saying why, at one bash can't
+  drop) and unsets CDPATH and GREP_OPTIONS (any could
+  change what a check sees), and
+  takes the home folder from the account, as the app started from the
+  Dock or at login does, not from HOME (nor `CFFIXED_USER_HOME`, which
+  that app never has; the updater takes its state folder from the account
+  the same way); it unsets PERL5OPT and PERL5LIB too, as it runs perl. A systat
+  started by a relative path is judged by its own working folder (`lsof`),
+  not the installer's. Of the notes an update left,
+  it prints only a failure, as one line of plain text the way the app shows
+  it (C0 and C1 controls and the characters that reverse how a line reads
+  or hide are dropped, a tab, line break or separator becomes a space, and
+  what isn't UTF-8 is left out, U+FFFD too, and spaces trimmed at both
+  ends: the same filter as the app's, which a test holds them to), and
+  removes them all. Its downloads are capped as the updater's are (1 MB for
+  the release answer, 200 MB for the image, 1 KB for the checksum) and given
+  up on as the updater's are (the release answer after 15 s with nothing
+  coming, a download after 30 s, either after 5 minutes in all); a failed
+  download says, by the HTTP status first (with redirects curl can report
+  a 404 as a failed read), whether the release (or the file in it) isn't there, GitHub
+  refused (its rate limit) or failed, the file is too large, or the network
+  failed or timed out. It works in
+  `~/Library/Application Support/systat-install` (0700, its ACL cleared so
+  nothing in it inherits one), not in Caches, which cleaner apps empty: from
+  removing the old copy until the move, the new one there is the only one.
+  Application Support and every folder above it must be on a volume that
+  keeps ownership (asked of the system: `df` names the mount, `diskutil`
+  says whether it keeps ownership, and a network share isn't a disk it
+  knows; `mount`'s text isn't read, as a mount point can hold a line break
+  and forge a line) and isn't a disk image (all another user can attach;
+  `diskutil` doesn't say who mounted it, which the updater asks of the
+  kernel instead), with its own message, and be changeable only by the user (root, or the
+  admin group for a system folder, aside), by permissions or by an allow ACL
+  for anyone else (an ACL it can't read fails it), the rule the updater
+  applies to its own folders: anyone else could swap the work folder, and an
+  inherited ACL that lets them write would pass on to every file of the new
+  copy, which `codesign` doesn't look at. The copy's ACLs are cleared too
+  (files and folders only, never through a link). One install runs at a
+  time: a `flock` on `systat-install.lock` beside it (`lockf` on a
+  descriptor the script holds open), let go when the script ends however it
+  ends, so a lock file left behind means nothing and no process ID can be
+  taken for an install. The lock file is the user's and private (0600, its ACL cleared; the
+  updater's lock file is too), as
+  another user who could open it could hold it and stop every install and
+  update; the perl holder's "held" file is the run's own, and goes with it; a folder it can't write, or a lock it can't open,
+  has its own message. It won't start while
+  systat updates itself (the updater's `flock`, probed with `lockf`, and
+  0.1.1's in Caches; a lock it can't open has its own message), and the
+  updater refuses to start, saying the installer is running, while that
+  lock is held (probed with a shared `flock`, let go at once): each would take
+  the other's copy for one it can replace. A lock held only for a moment (the
+  other side probing it) isn't taken for the other running: the installer
+  waits up to a second for its own and probes the updater's twice, the
+  updater tries its own for half a second and probes the installer's twice.
+  With a `lockf` older than macOS 26.4, which has no descriptor form, a
+  `perl` process of the installer's own holds its lock while the script
+  runs (not `lockf`, which resets TERM): it ignores the signals the script
+  ignores, runs in a process group of its own, says once it holds the lock
+  (the installer waits for that, not for it merely being alive), and lets
+  go within half a second of the script's end (it is held while the script
+  is its parent, not while a process ID lives, which could be reused); it
+  waits up to a second for the lock, as `lockf -t 1` does. Its `curl` runs with `-q`, so no `~/.curlrc` setting
+  applies. Each takes its own lock before
+  looking for the other's, so of two starting together at least one sees
+  the other. A failure once the old copy is gone keeps the work folder
+  (the new copy is only there); the lock goes with the script. Only the app counts as running
+  systat, not systat's command-line modes, which run the same executable.
+  The app is a process started by systat's executable (argv[0], `ps`'s
+  comm, made absolute: against the process's own working folder if
+  relative, or the executable it runs if started through a link), ending
+  in `/Contents/MacOS/systat`, with none of systat's command-line modes
+  among its arguments (as main.swift reads them; macOS's own may follow),
+  in a bundle whose identifier is systat's (or
+  with no Info.plist left at that path, as when it was moved, trashed or
+  half removed while it ran):
+  not a command-line mode, nor a debugger given systat's path, nor another
+  app whose executable is called systat. It quits each such process with a TERM, by process ID, every 2 s
+  while any runs: systat does nothing on quitting that a TERM skips, and
+  unlike an AppleScript quit, which goes through LaunchServices, it can't
+  launch a copy that has just quit (or a stray bundle of the same name),
+  nor wait on one that hangs. Which
+  copy runs from `/Applications` is told by the path `app_command` gives
+  (argv[0] made absolute, or the executable `lsof` names), compared as
+  written (a copy at `~/Applications/systat.app` isn't that one), and a
+  copy quit from elsewhere is mentioned on success as on an error. Just
+  before the old copy goes it looks again: a systat opened meanwhile (by its
+  login item, say) is quit the same way (noting which copy ran, and
+  reopening the one at `/Applications` if another won't quit), and the
+  staged copy is checked again after that wait. The copy at `/Applications` is the
+  one it reopens on a failure, only if that copy was running; a copy
+  running from elsewhere that it quit isn't reopened, and any error says
+  so. If a copy still won't quit, the one at `/Applications`, if it was
+  running and did quit, is opened again. Its downgrade check opens up the copy in place (as the checks before
+  the quit do) and gives `codesign` a second try, so a check failing for a
+  passing reason never lets an older build in. It starts by clearing out what an earlier
+  run left there (and in `~/Library/Caches/systat-install`, where earlier
+  installers worked), ejecting an image still mounted there, only if it really is a mount point, judged without following a link (forcibly, if it
+  must). The last check after the move gets a second try a second later,
+  as the helper's does. A copy that fails it, or part of one left by a move
+  across volumes that failed partway (one whose copy finished and only the
+  removal of the source failed passes, and goes on), is taken out of
+  `/Applications` into the work folder (`rejected.app`), or, if it can't
+  be moved, left with nothing executable in it, whatever its executable is
+  called and never through a link, so it can't start from the Dock or at
+  login. A latest release whose tag isn't a version is refused without
+  printing the tag, and a refused downgrade says how to name the version. The release notes are the
   CHANGELOG.md section for the version.
 - The app icon is the menu bar gauge drawn large: white on a graphite tile,
   the needle at rest, only the critical end of the dial red, so the Dock icon
@@ -529,6 +927,26 @@ no fallback is needed.
   signals.
 - For development, `scripts/install-local.sh` builds the working tree,
   ad-hoc signs it, replaces the app in `/Applications`, and relaunches it.
+  It uses `install.sh`'s own functions and checks (Application Support's
+  trust and volume, and that the copy in `/Applications` can be replaced),
+  refusing to run unless that script still ends in its `{ main "$@"; }` call,
+  so it can never install the published release instead: it takes the install lock first, then stages
+  in a folder of its own run's in Application Support (not Caches), clears
+  group and other write, setuid bits and ACLs from the build (as the
+  installer does a release's; the build's umask and folder may allow any)
+  before signing and pinning it, builds without the install lock's
+  descriptor (a daemon the build starts would keep it), won't
+  run alongside an install or an update (their locks),
+  checks it can replace the copy in `/Applications` (App Management)
+  before quitting systat, quits it as the installer does (reopening it if it
+  gives up before removing the old copy), ignores
+  interruptions from the quit until it ends, checks the staged
+  copy is still the very build it made (pinned by code directory hash)
+  before removing the old one, keeps the staged copy (naming it) if
+  replacing the old one fails, verifies the copy in place is that build
+  before opening it (taking anything else, or part of a copy, out of the
+  way, as the installer does), says when systat was left quit, and
+  removes staging folders earlier runs kept.
 - Clean the build output afterwards.
 - For checking a build without clicking the menu bar, the binary also takes
   `--sample` (one reading of the bars and both top-10 lists, as text),

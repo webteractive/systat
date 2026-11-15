@@ -22,7 +22,7 @@ if arguments.contains("--help") || arguments.contains("-h") {
       --bench [seconds]  measure CPU use with the menu closed, then open (default 30 s each), then exit
       --iconset <dir>    write the app icon's PNGs as an iconset into <dir> (for iconutil), then exit
       --check-update     ask GitHub whether a newer release exists, print the answer, then exit
-      --update           install the newest release in place: quits systat, swaps it, reopens it
+      --update           install the newest release in place: quits systat, swaps it, reopens it if it was running
       --version, -v      print the version, and the commit and build date of a packaged build
       --help             show this help
     """)

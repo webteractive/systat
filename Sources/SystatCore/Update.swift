@@ -80,19 +80,20 @@ public enum UpdateCheck {
         guard let current = SemVer(currentVersion), latest > current else { return nil }
 
         let version = latest.description
-        // Only this repo's releases: the page is what "Download systat X" opens.
-        // No "." or ".." anywhere (also when percent-encoded): a browser resolves them out of the repo.
-        let page = URL(string: release.htmlURL).flatMap(onGitHub)
-            .flatMap { $0.path.hasPrefix("/\(repo)/releases/") && !$0.pathComponents.contains { $0 == ".." || $0 == "." } ? $0 : nil }
-            ?? releasesPage
+        // The page "Download systat X" opens: this tag's page on this repo, exactly as GitHub writes
+        // it, or else the releases page. Compared as written, so no query, fragment, encoding or dot
+        // segment, nor another page, slips past (the tag is a strict version, see SemVer).
+        let tagPage = "https://github.com/\(repo)/releases/tag/\(release.tagName)"
+        let page = (release.htmlURL == tagPage ? URL(string: tagPage) : nil) ?? releasesPage
         // Allowlist: this repo's download path for this tag, over https, under the exact name
         // package.sh gives each file. Anything else is ignored rather than fetched.
-        let prefix = "/\(repo)/releases/download/\(release.tagName)/"
+        // Compared as written, not as parsed: no query, fragment, encoding or dot segment slips past.
+        let prefix = "https://github.com/\(repo)/releases/download/\(release.tagName)/"
         func asset(_ name: String) -> URL? {
             release.assets.lazy
-                .filter { $0.name == name }
+                .filter { $0.name == name && $0.browserDownloadURL == prefix + name }
                 .compactMap { URL(string: $0.browserDownloadURL).flatMap(onGitHub) }
-                .first { $0.path == prefix + name }
+                .first
         }
         let dmgName = "systat-\(version).dmg"
         return AvailableUpdate(version: version, releasePage: page,

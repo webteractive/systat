@@ -98,6 +98,11 @@ struct PanelView: View {
 
     private var footer: some View {
         VStack(spacing: 0) {
+            if let problem = updater.lastUpdateProblem {
+                UpdateProblemNote(problem: problem) { updater.dismissProblem() }
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+            }
             if let update = updater.offered {
                 UpdateRow(update: update, updater: updater)
             }
@@ -183,5 +188,24 @@ private struct MenuItemRow: View {
             .background(RoundedRectangle(cornerRadius: 5).fill(hovering ? Color.accentColor : Color.clear))
             .contentShape(Rectangle())
             .onHover { hovering = $0 }
+    }
+}
+
+/// What went wrong the last time systat updated, kept until dismissed.
+struct UpdateProblemNote: View {
+    let problem: String
+    let dismiss: () -> Void
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 6) {
+            Text(problem).font(.caption).foregroundStyle(criticalRed)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .textSelection(.enabled)
+            Button(action: dismiss) { Image(systemName: "xmark.circle.fill") }
+                .buttonStyle(.borderless)
+                .foregroundStyle(.secondary)
+                .help("Dismiss")
+                .accessibilityLabel("Dismiss")
+        }
     }
 }

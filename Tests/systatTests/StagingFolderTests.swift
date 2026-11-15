@@ -77,6 +77,16 @@ private struct Folder {
     #expect(folder.mode(of: elsewhere) == 0o755, "the link's target is left as it was")
 }
 
+@Test func aStagingFolderOfOursWithAnACLIsRefused() throws {
+    let folder = try Folder()
+    defer { folder.cleanUp() }
+    try FileManager.default.createDirectory(at: folder.staging, withIntermediateDirectories: false)
+    let acl = try Process.run(URL(fileURLWithPath: "/bin/chmod"), arguments: ["+a", "everyone allow add_file", folder.staging.path])
+    acl.waitUntilExit()
+
+    #expect(throws: UpdateInstaller.Failure.sharedFolder) { try UpdateInstaller.stagingRoot(beside: folder.url) }
+}
+
 @Test func aPlantedFileIsNeverStagedThrough() throws {
     let folder = try Folder()
     defer { folder.cleanUp() }
@@ -106,4 +116,154 @@ private struct Folder {
     #expect(fm.fileExists(atPath: rescued.path), "the helper said the previous app is there")
     #expect(fm.fileExists(atPath: fresh.path))
     #expect(fm.fileExists(atPath: other.path))
+}
+
+@Test func aRunWhoseMarkMakesNoSenseIsKept() throws {
+    // The swap marks the run before it exchanges anything; a mark that isn't its three lines can't
+    // say the app in it is a leftover, so it is kept as if it were the only copy.
+    let folder = try Folder()
+    defer { folder.cleanUp() }
+    let fm = FileManager.default
+    let run = folder.url.appendingPathComponent("run-swapped")
+    try fm.createDirectory(at: run.appendingPathComponent("systat.app"), withIntermediateDirectories: true)
+    try Data().write(to: run.appendingPathComponent(UpdateInstaller.swapMark))
+    try fm.setAttributes([.modificationDate: Date().addingTimeInterval(-3 * 86_400)], ofItemAtPath: run.path)
+
+    UpdateInstaller.pruneStaleRuns(in: folder.url, olderThan: Date().addingTimeInterval(-86_400))
+
+    #expect(fm.fileExists(atPath: run.appendingPathComponent("systat.app").path))
+}
+
+@Test func theOldCachesFolderIsReadOnceAndRetired() throws {
+    // 0.1.1 kept its lock and result in ~/Library/Caches/systat-update, and its helper reports
+    // the update to this version there.
+    let folder = try Folder()
+    defer { folder.cleanUp() }
+    let fm = FileManager.default
+    let current = folder.url.appendingPathComponent("current"), legacy = folder.url.appendingPathComponent("legacy")
+    try fm.createDirectory(at: current, withIntermediateDirectories: false)
+    try fm.createDirectory(at: legacy, withIntermediateDirectories: false)
+    try "failed: the new version didn't verify\n".write(to: legacy.appendingPathComponent("result"), atomically: true, encoding: .utf8)
+    try Data().write(to: legacy.appendingPathComponent("lock"))
+
+    let results = [current.appendingPathComponent("result"), legacy.appendingPathComponent("result")]
+    #expect(UpdateInstaller.lastResult(from: results) == "failed: the new version didn't verify")
+
+    // Its note is kept until it is dismissed, even through an update that starts meanwhile.
+    UpdateInstaller.retire(legacy)
+    #expect(UpdateInstaller.lastResult(from: results) == "failed: the new version didn't verify")
+    #expect(!fm.fileExists(atPath: legacy.appendingPathComponent("lock").path))
+
+    UpdateInstaller.clearLastResult(results)
+    UpdateInstaller.retire(legacy)
+    #expect(!fm.fileExists(atPath: legacy.path), "nothing worth keeping, so the old folder goes")
+}
+
+@Test func theOldCachesFolderIsKeptWhileItHoldsAnApp() throws {
+    let folder = try Folder()
+    defer { folder.cleanUp() }
+    let fm = FileManager.default
+    let previous = folder.url.appendingPathComponent("run-old/previous.app")
+    try fm.createDirectory(at: previous, withIntermediateDirectories: true)
+    // Old enough to prune on age alone: only the app in it keeps it.
+    try fm.setAttributes([.modificationDate: Date().addingTimeInterval(-3 * 86_400)],
+                         ofItemAtPath: folder.url.appendingPathComponent("run-old").path)
+    try Data().write(to: folder.url.appendingPathComponent("lock"))
+
+    UpdateInstaller.retire(folder.url)
+
+    #expect(fm.fileExists(atPath: previous.path), "0.1.1 told the user the previous app is there")
+    #expect(!fm.fileExists(atPath: folder.url.appendingPathComponent("lock").path))
+}
+
+@Test func aResultThatIsALinkIsIgnored() throws {
+    let folder = try Folder()
+    defer { folder.cleanUp() }
+    let elsewhere = folder.url.appendingPathComponent("elsewhere"), result = folder.url.appendingPathComponent("result")
+    try "failed: use the installer at evil.example".write(to: elsewhere, atomically: true, encoding: .utf8)
+    try FileManager.default.createSymbolicLink(at: result, withDestinationURL: elsewhere)
+
+    #expect(UpdateInstaller.lastResult(from: [result]) == nil)
+    #expect(FileManager.default.fileExists(atPath: elsewhere.path))
+}
+
+@Test(.timeLimit(.minutes(1))) func aResultThatIsAPipeNeverHangsTheLaunch() throws {
+    let folder = try Folder()
+    defer { folder.cleanUp() }
+    let result = folder.url.appendingPathComponent("result")
+    try #require(mkfifo(result.path, 0o600) == 0)
+
+    #expect(UpdateInstaller.lastResult(from: [result]) == nil)
+}
+
+@Test func aLongResultIsCut() throws {
+    let folder = try Folder()
+    defer { folder.cleanUp() }
+    let result = folder.url.appendingPathComponent("result")
+    try String(repeating: "x", count: 100_000).write(to: result, atomically: true, encoding: .utf8)
+
+    #expect((UpdateInstaller.lastResult(from: [result])?.count ?? 0) <= 4096)
+}
+
+@Test func anEmptyResultHidesNoOther() throws {
+    let folder = try Folder()
+    defer { folder.cleanUp() }
+    let empty = folder.url.appendingPathComponent("a"), real = folder.url.appendingPathComponent("b")
+    try Data().write(to: empty)
+    try "failed: why".write(to: real, atomically: true, encoding: .utf8)
+
+    #expect(UpdateInstaller.lastResult(from: [empty, real]) == "failed: why")
+}
+
+@Test func aNoteIsShownUntilItIsDismissed() throws {
+    // Quitting before reading it, or logging out, doesn't lose it.
+    let folder = try Folder()
+    defer { folder.cleanUp() }
+    let result = folder.url.appendingPathComponent("result")
+    try "failed: why".write(to: result, atomically: true, encoding: .utf8)
+
+    #expect(UpdateInstaller.lastResult(from: [result]) == "failed: why")
+    #expect(UpdateInstaller.lastResult(from: [result]) == "failed: why")
+    UpdateInstaller.clearLastResult([result])
+    #expect(UpdateInstaller.lastResult(from: [result]) == nil)
+}
+
+@Test func anOldFolderOthersCanChangeIsLeftAlone() throws {
+    let folder = try Folder()
+    defer { folder.cleanUp() }
+    let open = folder.url.appendingPathComponent("open")
+    try FileManager.default.createDirectory(at: open, withIntermediateDirectories: false)
+    try folder.chmod(open, 0o777)
+    try Data().write(to: open.appendingPathComponent("lock"))
+    let link = folder.url.appendingPathComponent("link"), target = folder.url.appendingPathComponent("target")
+    try FileManager.default.createDirectory(at: target, withIntermediateDirectories: false)
+    try Data().write(to: target.appendingPathComponent("lock"))
+    try FileManager.default.createSymbolicLink(at: link, withDestinationURL: target)
+
+    UpdateInstaller.retire(open)
+    UpdateInstaller.retire(link)
+
+    #expect(FileManager.default.fileExists(atPath: open.appendingPathComponent("lock").path))
+    #expect(FileManager.default.fileExists(atPath: target.appendingPathComponent("lock").path))
+}
+
+@Test func aNoteIsShownWithoutControlOrDirectionCharacters() throws {
+    // A path in it can hold anything a file name can: no C0 or C1 control, nor a character that
+    // reverses how the rest of the line reads.
+    let folder = try Folder()
+    defer { folder.cleanUp() }
+    let result = folder.url.appendingPathComponent("result")
+    try "failed: open /Users/a\u{9B}31mb\u{1B}[2J\u{202E}c\u{2066}d\u{07}.app\tnow\u{2028}or\u{2029}later\n".write(to: result, atomically: true, encoding: .utf8)
+
+    #expect(UpdateInstaller.lastResult(from: [result]) == "failed: open /Users/a31mb[2Jcd.app now or later")
+}
+
+@Test func whatIsntUTF8InANoteIsLeftOut() throws {
+    // As the installer prints it: a note cut short mid-character at 4 KB, say.
+    let folder = try Folder()
+    defer { folder.cleanUp() }
+    let result = folder.url.appendingPathComponent("result")
+    try Data([0x66, 0x3A, 0x20, 0x78, 0xFF, 0x79, 0x20, 0xC3]).write(to: result)
+
+    #expect(UpdateInstaller.lastResult(from: [result]) == "f: xy")
 }

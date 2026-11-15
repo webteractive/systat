@@ -46,6 +46,9 @@ struct SettingsView: View {
             }
             Section("Updates") {
                 Toggle("Check for updates daily", isOn: $updater.checksAutomatically)
+                if let problem = updater.lastUpdateProblem {
+                    UpdateProblemNote(problem: problem) { updater.dismissProblem() }
+                }
                 HStack {
                     Text(updateStatus).foregroundStyle(updateFailed ? criticalRed : Color.secondary)
                     Spacer()
